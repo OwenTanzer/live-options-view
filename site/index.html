@@ -72,6 +72,18 @@
   #vwap-rvol[data-state="fallback"], #momentum[data-state="fallback"],
   #vwap-rvol[data-state="closed"], #momentum[data-state="closed"] { opacity: 0.72; }
 
+  .momentum-strip { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: .24rem .52rem; max-width: 100%; }
+  .momentum-cell { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .momentum-strip[data-state="live"] [data-direction="up"] { color: #64cf8e; }
+  .momentum-strip[data-state="live"] [data-direction="down"] { color: #ff9791; }
+  .momentum-strip [data-direction="unknown"], .momentum-strip[data-state="retained"] { color: var(--dim); }
+  .quote-card .momentum-strip { display: grid; grid-template-columns: repeat(3,auto); gap: 2px 4px; font-size: .58rem; }
+  .quote-card .momentum-caption { grid-column: 1 / -1; }
+  @media (max-width: 600px) {
+    #momentum.momentum-strip, #history-clock-momentum.momentum-strip { display: flex; flex-wrap: wrap; width: 100%; min-width: 0; }
+    #momentum .momentum-caption, #history-clock-momentum .momentum-caption { flex-basis: 100%; }
+  }
+
   /* ── status bar ──────────────────────────────────────────────────────── */
   #status-bar {
     display: flex;
@@ -1653,6 +1665,7 @@
     <a id="history-clock-kalshi" hidden>Open private Kalshi receipts at this cursor</a>
     <section id="clock-chain-view" aria-label="Chain at shared cursor">
     <p id="history-clock-status" role="status">Choose a session and cursor.</p>
+    <p id="history-clock-momentum" class="momentum-strip"></p>
     <p id="history-clock-skew"></p><p id="history-clock-adaptive"></p>
     <p>Anchored bot decisions appear with their publication receipts on the Automated tab.</p>
     <div style="overflow:auto"><table style="width:100%"><thead><tr><th>Calls</th><th>Strike</th><th>Puts</th></tr></thead><tbody id="history-clock-rows"></tbody></table></div>
@@ -1690,7 +1703,7 @@
   <span id="price-age" class="chain-snapshot" role="status"></span>
   <span id="tier-badge" style="display:none"></span>
   <span id="vwap-rvol" class="vwap-rvol"></span>
-  <span id="momentum" class="momentum"></span>
+  <span id="momentum" class="momentum momentum-strip"></span>
   <span id="max-pain" title="Strike with the lowest combined call and put payout at expiration, weighted by settled open interest across the selected chain. Requires five strikes with open interest on both sides.">Max pain —</span>
   <span id="qqq-iv"><button type="button" aria-controls="iv-pop" aria-expanded="false">IV <b>&#8212;</b></button><button type="button" aria-controls="iv-pop" aria-expanded="false">Put IV premium <b>&#8212;</b></button><time></time><span class="iv-pop" id="iv-pop" hidden><canvas width="285" height="80" aria-label="Intraday volatility history"></canvas><small></small></span></span>
     <span id="chain-note" class="chain-note"></span>
@@ -2164,6 +2177,7 @@
 <script src="shared/csv-ranges.js?v=2037c69afbe5d94b"></script>
 <script src="shared/heatmap.js?v=eb4842977a7fc73e"></script>
 <script src="shared/quotes.js?v=3b80b4397c3c4608"></script>
+<script src="js/momentum-strip.js?v=1a89813a961cd863"></script>
 <script src="shared/format.js?v=3443e4a7b83f1c13"></script>
 <script src="shared/instruments.js?v=860821b9e03c4a08"></script>
 <script src="shared/quote-panel.js?v=3806793be069e8a7"></script>
@@ -2244,7 +2258,7 @@ let timerHandle = null;
 // so the page's script order is unchanged. No test slices up to this banner;
 // it stays here as the section's marker.
 </script>
-<script src="js/render-heatmap.js?v=2f82e1564ca76714"></script>
+<script src="js/render-heatmap.js?v=c891bafd7a61783f"></script>
 <script>
 
 // ── paper trading ─────────────────────────────────────────────────────────────
@@ -2280,7 +2294,7 @@ let timerHandle = null;
 // stays here as the section's marker.
 </script>
 <script src="js/qqq-iv.js?v=3d367be7c00bcf71"></script>
-<script src="js/data-fetch-cycle.js?v=fee5b5bdb8bb7924"></script>
+<script src="js/data-fetch-cycle.js?v=67cff2ff2a1e1b26"></script>
 <script src="js/oi-skew-meter.js?v=e4f1fc4047f80a6f"></script>
 <script src="js/reference-oi-skew-meters.js?v=684a55cfdd32ce6c"></script>
 <script>
@@ -2299,8 +2313,8 @@ let timerHandle = null;
 // module instead of slicing fetchPrices out of the page; the banner stays
 // here as the section's marker.
 </script>
-<script src="js/quote-panel.js?v=0db84bc42f6b9006"></script>
-<script src="js/price-strip.js?v=85303bf410ddc98c"></script>
+<script src="js/quote-panel.js?v=1994914f13be4c1f"></script>
+<script src="js/price-strip.js?v=dec8fc919ee060e0"></script>
 <script>
 // EIA STEO crude calibration + OVX regime — moved to js/steo-fetch.js (B2),// loaded below in the same position, so the page's script order is unchanged.
 // The steo tests load the module instead of slicing fetchSteoCalibration out

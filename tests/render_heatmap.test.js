@@ -44,6 +44,7 @@ const sandbox = {
   liveQuotes: { get: sym => ({ bid: 1.1, ask: 1.2, sym }) },
   openTicket: (e, row) => { calls.openTicket.push([e, row]); },
   formatVwapRvol: () => ({ text: 'VWAP 600.50 · RVOL 1.20', state: 'live' }),
+  paintMomentumStrip: el => {el.textContent = 'MOM +0.40'; el.dataset.state = 'up';},
   formatMomentum: () => ({ text: 'MOM +0.40', state: 'up' }),
   formatChainSnapshot: sharedFormat.formatChainSnapshot,
   document: { getElementById: id => (els[id] ||= makeEl()) },
@@ -84,7 +85,7 @@ assert.deepEqual(calls.buildRows[0].opts.getQuote('QQQ260918C00600000'), { bid: 
 assert.equal(typeof calls.buildRows[0].opts.onCellClick, 'function', 'QQQ cells open tickets');
 calls.buildRows[0].opts.onCellClick({ type: 'click' }, { Strike: 600 });
 assert.equal(calls.openTicket.length, 1, 'a QQQ cell click opens a ticket');
-assert.equal(els['chain-note'].textContent, '', 'QQQ has no view-only note');
+assert.equal(els['chain-note'].textContent, 'Opening OI unavailable', 'QQQ missing opening evidence is labeled');
 assert.equal(els['price'].textContent, '$600.10', 'header shows the spot');
 // #178: the header now says which snapshot the price came from, its session
 // and its age — and marks the value retained once collection has stopped.

@@ -54,6 +54,11 @@ function quoteCard(doc, row, { section, index = null, movable = false, onPinTogg
   el.appendChild(change);
   el.appendChild(state);
   el.appendChild(age);
+  if (row.label === 'QQQ' && section === 'core') {
+    const momentum = quotePanelElement(doc, 'span', 'momentum-strip');
+    momentum.id = 'qqq-card-momentum';
+    el.appendChild(momentum);
+  }
   const card = { el, row, section, index, priceEl: price, changeEl: change, stateEl: state, ageEl: age, moveLeft: null, moveRight: null, unpin: null };
   if (movable) {
     const controls = quotePanelElement(doc, 'span', 'pin-controls');

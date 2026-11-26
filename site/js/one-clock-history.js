@@ -156,6 +156,7 @@ updateView();
 el('history-clock-bot').onchange=()=>renderCommitted(clock.select(clock.snapshot()));
 function clear(message) {
   el('history-clock-status').textContent=message; el('history-clock-rows').replaceChildren();
+  el('history-clock-momentum').textContent='';
   el('history-clock-skew').textContent='';el('history-clock-adaptive').textContent='';el('history-clock-evidence').textContent='';
 }
 async function renderChain(selection) {
@@ -180,6 +181,12 @@ async function renderChain(selection) {
     const raw=describeReferenceOiSkew(data,selection.cutoff);
     const cursorLabel=new Intl.DateTimeFormat('en-GB',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).format(selection.cutoff);
     el('history-clock-status').textContent=`${instrument} · session ${session} · expiration ${data.expiration} · cursor ${cursorLabel} New York · snapshot ${new Date(row.eventAt).toISOString()} · ${reading.state} (${Math.round(reading.ageMs/1000)} s old). ${spotText}. Read-only replay.${instrument==='QQQ' && typeof openingOiNote==='function'?' '+openingOiNote(opening):''}`;
+    if (instrument === 'QQQ') {
+      const node = el('history-clock-momentum');
+      if (data.underlying_market?.momentum_windows) {
+        paintMomentumStrip(node, data.underlying_market, {at:selection.cutoff, retained:reading.state !== 'fresh'});
+      } else node.textContent = 'Momentum windows unavailable in this snapshot.';
+    }
     el('history-clock-skew').textContent=`Published reference skew: ${raw.text} · ${raw.availability==='live'?'fresh at cursor':raw.availability}. ${raw.detail}`;
     if(instrument==='IBIT') {
       const adaptive=computeAdaptiveOiSkew(data.rows,spot);
