@@ -68,6 +68,7 @@ class Episodes(unittest.TestCase):
         fill=True,
         quote_age=0,
         ask_age=None,
+        quote_override=None,
         ask=None,
         bid_age=None,
         corrupt=None,
@@ -90,7 +91,7 @@ class Episodes(unittest.TestCase):
             ask_time = now - timedelta(
                 seconds=quote_age if ask_age is None else ask_age
             )
-            return {
+            result = {
                 s: Quote(
                     s,
                     bid,
@@ -102,6 +103,7 @@ class Episodes(unittest.TestCase):
                 )
                 for s in symbols
             }
+            return quote_override(result) if quote_override else result
 
         request = f"{strategy}-{stamp}"
         ctx = StrategyContext(
@@ -128,6 +130,69 @@ class Episodes(unittest.TestCase):
                 )
             )
         return d
+
+    def test_cheaper_siblings_select_one_adjacent_strike_in_one_batch(self):
+        for parent, child, spot, direction, width in (
+            (MOUSE, "max_pain_mouse_cheaper_qqq", 399, "C", 0.15),
+            (RAT, "max_pain_rat_cheaper_qqq", 401, "P", 0.25),
+        ):
+            with self.subTest(child=child):
+                self.fills.clear()
+                expected = f"QQQ261124{direction}00400000"
+                batches = []
+
+                def cheaper(quotes):
+                    batches.append(list(quotes))
+                    return {s: replace(q, bid=0.97, ask=1) if s == expected else q
+                            for s, q in quotes.items()}
+
+                base = self.act(0, spot, ask=1.25, strategy=parent, fill=False)
+                entry = self.act(0, spot, ask=1.25, strategy=child, quote_override=cheaper)
+                self.assertEqual(batches, [[base.symbol, expected]])
+                self.assertEqual((entry.action, entry.symbol, entry.quantity, entry.limit_price),
+                                 ("buy", expected, 1, 1))
+                self.assertEqual(entry.metadata["parent_ask"], 1.25)
+                self.assertEqual(entry.metadata["candidate_ask"], 1)
+                self.assertEqual(entry.metadata["candidate_ask_ts"], START.isoformat())
+                sale = self.act(1, None, 1 + width, strategy=child)
+                self.assertEqual((sale.action, sale.symbol, sale.metadata["threshold"]),
+                                 ("sell", expected, width))
+                self.assertIn("new directional", self.act(2, spot, strategy=child).reason)
+
+    def test_closer_wrong_expiry_strike_cannot_enter_quote_batch(self):
+        parent = board(START, 399).atm("call")
+        near = {**parent, "Strike": 399.5, "OptionSymbol": "QQQ261124C00399500"}
+        for overrides in ({"Expiration": "2026-11-25"}, {"OptionSymbol": "QQQ261125C00399500"}):
+            with self.subTest(overrides=overrides):
+                invalid = {**near, **overrides}
+                decision = self.act(0, strategy="max_pain_mouse_cheaper_qqq", corrupt=invalid,
+                                    quote_override=lambda _: self.fail("wrong-expiry board requested quotes"))
+                self.assertEqual(decision.action, "no_trade")
+                self.assertIn("No fresh current-session", decision.reason)
+
+    def test_cheaper_sibling_rejects_missing_stale_crossed_or_costly_quote(self):
+        strategy = "max_pain_mouse_cheaper_qqq"
+        old = (START - timedelta(hours=1)).isoformat()
+        parent = "QQQ261124C00399000"
+        candidate = "QQQ261124C00400000"
+        for symbol, update in (
+            (candidate, None), (parent, None), (candidate, {"ask_ts": old}),
+            (parent, {"ask_ts": old}), (candidate, {"bid": 3}),
+            (candidate, {"ask": 1.25}), (candidate, {"ask": 2}),
+            (candidate, {"ask": 1.011}),
+        ):
+            def override(quotes):
+                if update is None:
+                    del quotes[symbol]
+                else:
+                    quotes[symbol] = replace(quotes[symbol], **update)
+                return quotes
+
+            with self.subTest(symbol=symbol, update=update):
+                d = self.act(0, ask=1.25, strategy=strategy, quote_override=override)
+                self.assertEqual(d.action, "no_trade")
+                self.assertEqual(d.metadata["candidate_symbol"], candidate)
+                self.assertEqual(d.metadata["parent_symbol"], parent)
 
     def test_thresholds_bounds_and_missing_snapshot(self):
         for strategy, width in ((MOUSE, 0.15), (RAT, 0.25)):

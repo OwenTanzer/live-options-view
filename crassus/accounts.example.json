@@ -558,6 +558,20 @@
       "active": false
     },
     {
+      "alias": "Max_Pain_mouse_cheaper",
+      "username": "crassus_mp_mouse_cheap",
+      "password_env": "CRASSUS_PW_MAX_PAIN_MOUSE_CHEAPER",
+      "strategy_id": "max_pain_mouse_cheaper_qqq",
+      "active": false
+    },
+    {
+      "alias": "Max_Pain_rat_cheaper",
+      "username": "crassus_mp_rat_cheap",
+      "password_env": "CRASSUS_PW_MAX_PAIN_RAT_CHEAPER",
+      "strategy_id": "max_pain_rat_cheaper_qqq",
+      "active": false
+    },
+    {
       "alias": "Bowman Max Pain",
       "username": "crassus_bowman_pin",
       "password_env": "CRASSUS_PW_BOWMAN_MAX_PAIN",
