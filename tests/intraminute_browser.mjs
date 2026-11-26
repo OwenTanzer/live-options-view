@@ -30,11 +30,11 @@ try {
   await page.locator('#regime-low').fill('685.7');
   await page.locator('#regime-high').fill('686');
   await page.locator('#regime-sigma').fill('0.22');
-  await page.locator('#regime-known').fill('2026-11-13T14:35:00');
+  await page.locator('#regime-known').fill('2026-11-13T14:35');
   await page.waitForFunction(()=>document.querySelector('#regime-result').textContent.startsWith('Below '));
   const probabilities=await page.locator('#regime-result').textContent();
   assert.match(probabilities, /Inside [\d.]+% · Above [\d.]+%/);
-  await page.locator('#regime-known').fill('2026-11-13T14:37:00');
+  await page.locator('#regime-known').fill('2026-11-13T14:37');
   await page.waitForFunction(()=>document.querySelector('#regime-result').textContent.includes('known by the cursor'));
   await page.locator('#regime-panel summary').click();
   await page.locator('#width').selectOption('1000');
@@ -49,6 +49,11 @@ try {
   await page.waitForTimeout(600);
   assert.ok(polls>=2);
   assert.match(await page.locator('#state').textContent(),/last receipt 14:33:08.000 UTC · age 172.0 s/);
+  await page.locator('#regime-panel summary').click();
+  await page.waitForFunction(()=>document.querySelector('#regime-result').textContent.includes('partial live minute'));
+  await page.route('**/api/one-clock/intraminute?cursor=*',route=>route.fulfill({status:503,json:{}}));
+  await page.waitForFunction(()=>document.querySelector('#regime-result').textContent.includes('Waiting for live tape to recover'));
+  await page.locator('#regime-panel summary').click();
   await page.locator('#sample').click();
   await page.waitForFunction(()=>document.querySelector('#state').textContent.includes('14:36'));
   await page.setViewportSize({width:390,height:844});
