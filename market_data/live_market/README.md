@@ -28,6 +28,19 @@ Crassus is a separate deployable with its own dependencies and strategy state.
 - `intraday/latest.json` and `intraday/spy/latest.json` hold separate underlying
   snapshots. A missing SPY reading must not substitute QQQ. See the
   [SPY contract](../../docs/specs/SPY_COLLECTION.md).
+- Each minute-chain CSV and latest JSON contains per-row `ModelGamma`,
+  `ModelVanna`, `ModelVega`, `ModelCharm` and `IVObservedAt`. The selected
+  equity chain's Option Greeks panel shows both sides at the nearest or a
+  chosen strike. The European reference model assumes zero rates and dividend
+  yield, decimal annual IV, and ACT/365 to the expiration day's NYSE cash close
+  (including early closes). Its per-share units are delta per spot dollar,
+  delta per IV point, premium dollars per IV point, and instantaneous delta
+  change per elapsed calendar day. These are long-option sensitivities. The
+  collector has no dealer inventory sign. `Gamma` and `Vega` remain the
+  provider's originals. Unknown, future or stale IV/spot provider clocks,
+  unavailable calendar, or expired inputs leave the model fields null.
+  Existing snapshot writes carry the fields with no new subscriptions, storage
+  requests or polling; legacy snapshots have no model readings.
 - Snapshot open interest is prior-day settled information. Volume and volume
   changes provide intraday activity; they do not measure newly opened positions.
 - VWAP (volume-weighted average price) uses sampled underlying prices weighted by

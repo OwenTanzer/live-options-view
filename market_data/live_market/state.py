@@ -328,7 +328,9 @@ def restore_state(s3, today: date, us: "UnderlyingSession | None" = None) -> Non
         # (any col not in core option fields).
         core_cols = {"TradeDate","Expiration","Strike","Type","OptionSymbol","DTE",
                      "OpenInterest","Volume","VolDelta","Bid","Mid","Ask","Last",
-                     "IV","Delta","Gamma","Theta","Vega","UnderlyingPrice"}
+                     "IV","Delta","Gamma","Theta","Vega","UnderlyingPrice","IVObservedAt"}
+        from .option_sensitivities import FIELDS
+        core_cols.update(FIELDS)
         for col in (df.columns if us is QQQ_SESSION else ()):
             if col not in core_cols:
                 val = df[col].dropna().iloc[-1] if not df[col].dropna().empty else None

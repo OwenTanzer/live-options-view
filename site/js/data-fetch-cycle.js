@@ -124,6 +124,7 @@ function maxPainStrike(data) {
 }
 
 function clearChain(message) {
+  if (typeof paintOptionSensitivities === 'function') paintOptionSensitivities(null);
   document.getElementById('heatmap-body').innerHTML = '';
   document.getElementById('heatmap-wrap').classList.add('hidden');
   const noData = document.getElementById('no-data');
@@ -176,6 +177,7 @@ function renderSelectedChain() {
   }
   const pin = maxPainStrike(data);
   const retained = state.error || formatChainSnapshot(data).state === 'retained';
+  if (typeof paintOptionSensitivities === 'function') paintOptionSensitivities(data, Boolean(retained));
   document.getElementById('max-pain').textContent = pin == null
     ? 'Max pain unavailable'
     : `Max pain $${pin.toFixed(2)}${retained ? ' · retained' : ''}`;

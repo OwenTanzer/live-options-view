@@ -391,7 +391,7 @@ class DXLinkFeed:
                     "Summary":  ["eventType", "eventSymbol", "openInterest", "prevDayClosePrice", "dayOpenPrice", "prevDayId", "dayId"],
                     "Trade":    ["eventType", "eventSymbol", "dayVolume", "price", "time"],
                     "TradeETH": ["eventType", "eventSymbol", "price", "time"],
-                    "Greeks":   ["eventType", "eventSymbol", "volatility", "delta", "gamma", "theta", "vega"],
+                    "Greeks":   ["eventType", "eventSymbol", "time", "volatility", "delta", "gamma", "theta", "vega"],
                 },
             })
             if self._timesale_symbols:
@@ -782,6 +782,10 @@ class DXLinkFeed:
                 elif et == "TimeAndSale":
                     self._ingest_time_and_sale(s, event)
                 elif et == "Greeks":
+                    # Pair the IV with this event's own provider clock. A missing IV
+                    # cannot refresh the last usable observation's timestamp.
+                    if self._to_float(event.get("volatility")) is not None:
+                        s["iv_observed_at"] = self._event_time(event.get("time"))
                     for field in ("volatility", "delta", "gamma", "theta", "vega"):
                         v = self._to_float(event.get(field))
                         if v is not None:

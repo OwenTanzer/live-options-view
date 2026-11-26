@@ -72,6 +72,11 @@
   #vwap-rvol[data-state="fallback"], #momentum[data-state="fallback"],
   #vwap-rvol[data-state="closed"], #momentum[data-state="closed"] { opacity: 0.72; }
 
+  #option-sensitivities { margin: .5rem 1rem; font-size: .85rem; }
+  #option-sensitivities summary { cursor: pointer; }
+  #option-sensitivities table { width: auto; max-width: 100%; margin: .5rem 0; font-variant-numeric: tabular-nums; }
+  #option-sensitivities th, #option-sensitivities td { padding: .15rem .4rem; text-align: right; }
+  #option-sensitivities p { max-width: 78ch; color: var(--dim); }
   .momentum-strip { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: .24rem .52rem; max-width: 100%; }
   .momentum-cell { white-space: nowrap; font-variant-numeric: tabular-nums; }
   .momentum-strip[data-state="live"] [data-direction="up"] { color: #64cf8e; }
@@ -1715,6 +1720,17 @@
     <span id="chain-note" class="chain-note"></span>
 </div>
 
+<details id="option-sensitivities" hidden>
+  <summary>Option Greeks · gamma, vanna, vega and charm</summary>
+  <label>Strike <select aria-label="Option Greeks strike"></select></label>
+  <output aria-live="polite"></output>
+  <table aria-label="Model sensitivities per long option share"><thead><tr>
+    <th>Side</th><th>Gamma</th><th>Vanna</th><th>Vega</th><th>Charm</th>
+  </tr></thead><tbody></tbody></table>
+  <p>Long-option sensitivities per share. Gamma is delta per $1 spot move. Vanna and vega are delta and option dollars per IV percentage point. Charm is the local delta change per elapsed calendar day. Dealer positions are unknown.</p>
+  <p>European model, zero rates and dividends, using each contract’s IV and the expiration date’s equity-session close. A dash means the model inputs are unavailable or out of date.</p>
+</details>
+
 <section id="btc-panel" hidden aria-label="Bitcoin options (USDC)"><div id="btc-chain"></div></section>
 <div id="status-bar">
   <span id="status-dot"></span>
@@ -2264,6 +2280,7 @@ let timerHandle = null;
 // so the page's script order is unchanged. No test slices up to this banner;
 // it stays here as the section's marker.
 </script>
+<script src="js/option-sensitivities.js?v=9216047d1e0b08bd"></script>
 <script src="js/render-heatmap.js?v=c891bafd7a61783f"></script>
 <script>
 
@@ -2300,7 +2317,7 @@ let timerHandle = null;
 // stays here as the section's marker.
 </script>
 <script src="js/qqq-iv.js?v=3d367be7c00bcf71"></script>
-<script src="js/data-fetch-cycle.js?v=67cff2ff2a1e1b26"></script>
+<script src="js/data-fetch-cycle.js?v=364e9812f58ec8af"></script>
 <script src="js/oi-skew-meter.js?v=e4f1fc4047f80a6f"></script>
 <script src="js/reference-oi-skew-meters.js?v=684a55cfdd32ce6c"></script>
 <script>

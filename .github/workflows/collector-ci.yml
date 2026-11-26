@@ -18,6 +18,7 @@ on:
       - "tests/test_crypto_collector.py"
       - "tests/test_feed_reauth.py"
       - "tests/test_snapshot_provenance.py"
+      - "tests/test_option_sensitivities.py"
       - "tests/test_one_clock_publisher.py"
       - "tests/test_market_readings.py"
       - "tests/test_market_readings_series.py"
@@ -73,6 +74,7 @@ on:
       - "tests/test_crypto_collector.py"
       - "tests/test_feed_reauth.py"
       - "tests/test_snapshot_provenance.py"
+      - "tests/test_option_sensitivities.py"
       - "tests/test_one_clock_publisher.py"
       - "tests/test_market_readings.py"
       - "tests/test_market_readings_series.py"
@@ -157,7 +159,9 @@ jobs:
       - name: Run DXLink streamer-token expiry suite (E1)
         run: python -m unittest discover -s tests -p test_feed_reauth.py -v
       - name: Run snapshot price provenance suite (#146)
-        run: python -m unittest discover -s tests -p test_snapshot_provenance.py -v
+        run: |
+          python -m unittest discover -s tests -p test_snapshot_provenance.py -v
+          python -m unittest discover -s tests -p test_option_sensitivities.py -v
       - name: Immutable One Clock publication and crash recovery
         run: python -m unittest discover -s tests -p test_one_clock_publisher.py -v
       - name: Run reference market-readings suite (#107)
