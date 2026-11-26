@@ -159,6 +159,17 @@ class Episodes(unittest.TestCase):
                                  ("sell", expected, width))
                 self.assertIn("new directional", self.act(2, spot, strategy=child).reason)
 
+    def test_closer_wrong_expiry_strike_cannot_enter_quote_batch(self):
+        parent = board(START, 399).atm("call")
+        near = {**parent, "Strike": 399.5, "OptionSymbol": "QQQ261124C00399500"}
+        for overrides in ({"Expiration": "2026-11-25"}, {"OptionSymbol": "QQQ261125C00399500"}):
+            with self.subTest(overrides=overrides):
+                invalid = {**near, **overrides}
+                decision = self.act(0, strategy="max_pain_mouse_cheaper_qqq", corrupt=invalid,
+                                    quote_override=lambda _: self.fail("wrong-expiry board requested quotes"))
+                self.assertEqual(decision.action, "no_trade")
+                self.assertIn("No fresh current-session", decision.reason)
+
     def test_cheaper_sibling_rejects_missing_stale_crossed_or_costly_quote(self):
         strategy = "max_pain_mouse_cheaper_qqq"
         old = (START - timedelta(hours=1)).isoformat()
