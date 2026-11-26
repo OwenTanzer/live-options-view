@@ -73,6 +73,13 @@
       "strategy_id": "momentum_qqq"
     },
     {
+      "alias": "Newton Max Pain",
+      "username": "crassus_newton_pin",
+      "password_env": "CRASSUS_PW_NEWTON_PIN",
+      "strategy_id": "max_pain_newton_qqq",
+      "active": false
+    },
+    {
       "alias": "Max Pain",
       "username": "crassus_maxpain",
       "password_env": "CRASSUS_PW_MAX_PAIN",

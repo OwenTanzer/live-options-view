@@ -340,9 +340,49 @@ def scenario_multiple_open_positions_stand_down() -> None:
     check("reason flags multiple positions", "more than one" in decision.reason.lower())
 
 
+def scenario_newton_entries_and_exits() -> None:
+    from dataclasses import replace
+    from datetime import datetime, timedelta, timezone
+    from crassus.exits import DEFAULT_COVERED
+    from crassus.replay import reset_strategy_state
+
+    sid = "max_pain_newton_qqq"
+    start = datetime(2024, 1, 1, 15, tzinfo=timezone.utc)
+    def step(index, spot, trades=None, age=0):
+        now = start + timedelta(minutes=index)
+        symbols = [occ(400, side) for side in ("call", "put")]
+        ctx = make_ctx(rows=WIDE_CHAIN, underlying_price=spot, trades=trades,
+                       quote_map={symbol: fresh_quote(symbol) for symbol in symbols})
+        board = replace(ctx.snapshot, timestamp=(now - timedelta(minutes=age)).isoformat())
+        return REGISTRY[sid](replace(ctx, snapshot=board, now_et=now))
+
+    for anchor, spot, side in [(390, 395.5, "call"), (410, 404, "put")]:
+        reset_strategy_state(sid)
+        check("warming gate", step(0, anchor).action == "no_trade")
+        d = step(60, spot)
+        check("same direction buys", d.action == "buy" and d.metadata["newton_direction"] == side)
+    reset_strategy_state(sid)
+    step(0, 397)
+    d = step(60, 395.5)
+    check("bearish Newton blocks pin call", d.action == "no_trade" and d.metadata["pin_direction"] == "call")
+    check("stale board cannot confirm", step(72, 395.5, age=10).action == "no_trade")
+    reset_strategy_state(sid)
+    step(0, 390)
+    check("future board rejected before recording", step(60, 395.5, age=-10).action == "no_trade")
+    check("future rejection did not poison next real board", step(60, 395.5).action == "buy")
+    check("same-day rewind blocks entry", step(59, 395.5).action == "no_trade")
+    held = [{"sym":occ(400,"call"),"side":"buy","qty":1,"price":1.0}]
+    reset_strategy_state(sid)
+    check("missing confirmation leaves parent hold", step(0, 395.5, held).action == "no_trade")
+    d = step(1, 400, held)
+    check("missing confirmation cannot block parent exit", d.action == "sell" and d.symbol == held[0]["sym"])
+    check("same runner exit coverage", sid in DEFAULT_COVERED)
+
+
 def main() -> int:
     for scenario in (
         scenario_registered,
+        scenario_newton_entries_and_exits,
         scenario_compute_max_pain_small_chain,
         scenario_compute_max_pain_symmetric_chain,
         scenario_compute_max_pain_asymmetric_chain,

@@ -332,6 +332,8 @@ isolates it for `smoke_atm_roundtrip`. Named for Persephone's seasonal
 descent, matching the strategy's one-directional (bearish) mandate. See
 `scripts/verify_momentum_puts_only.py` for hermetic coverage.
 
+**Newton Max Pain** (`max_pain_newton_qqq`) uses Regular Max Pain’s option selection and exit policy. An entry needs Regular Newton’s trailing direction to agree at that decision. The example paper account starts inactive.
+
 ## `reddit_sentiment_qqq`
 
 A second strategy, outside the six-strategy P3 mapping above: buys one ATM

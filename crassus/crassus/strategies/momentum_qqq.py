@@ -173,6 +173,16 @@ def _open_positions(ctx: StrategyContext) -> dict[str, Position]:
     return {symbol: position for symbol, position in ctx.book.positions.items() if position.quantity != 0}
 
 
+def supported_side(signal: MomentumSignal | None, params: dict) -> str | None:
+    if signal is None or signal.status != "ok" or signal.return_pct is None:
+        return None
+    if signal.return_pct >= params.get("bullish_threshold", DEFAULT_BULLISH_THRESHOLD):
+        return "call"
+    if signal.return_pct <= params.get("bearish_threshold", DEFAULT_BEARISH_THRESHOLD):
+        return "put"
+    return None
+
+
 def _decide_core(
     ctx: StrategyContext,
     signal: MomentumSignal | None,
@@ -277,11 +287,10 @@ def _decide_core(
         )
 
     params = ctx.params or {}
-    bullish_threshold = params.get("bullish_threshold", DEFAULT_BULLISH_THRESHOLD)
-    bearish_threshold = params.get("bearish_threshold", DEFAULT_BEARISH_THRESHOLD)
 
     ret = signal.return_pct
-    if ret is None or bearish_threshold < ret < bullish_threshold:
+    supported_type = supported_side(signal, params)
+    if supported_type is None:
         return _maybe_close_unsupported(
             ctx, held_symbol, held_quantity, held_type, no,
             f"Trailing return over the last {signal.anchor_age_minutes:.0f}m "
@@ -290,7 +299,6 @@ def _decide_core(
             meta_base,
         )
 
-    supported_type = "call" if ret >= bullish_threshold else "put"
     direction = "up" if supported_type == "call" else "down"
 
     vwap_confirmation_required = params.get("vwap_confirmation_required", False)
@@ -466,11 +474,12 @@ def _close(
     )
 
 
-def _decide(ctx: StrategyContext) -> Decision:
+def observe_signal(ctx: StrategyContext) -> tuple[MomentumSignal | None, str | None]:
+    """Record this board once and expose Newton’s reading without an order or quote."""
     global _last_recorded_snapshot, _last_observed_at
 
     if ctx.session_phase != "open":
-        return _decide_core(ctx, None)
+        return None, None
 
     params = ctx.params or {}
     lookback_minutes = params.get("lookback_minutes", DEFAULT_LOOKBACK_MINUTES)
@@ -478,17 +487,16 @@ def _decide(ctx: StrategyContext) -> Decision:
     max_snapshot_age = params.get("max_snapshot_age_minutes", DEFAULT_MAX_SNAPSHOT_AGE_MINUTES)
 
     observed_at = _snapshot_observed_at(ctx.snapshot.timestamp)
-    if observed_at is None:
-        return _decide_core(ctx, None, stale_source_reason=f"unparseable snapshot timestamp {ctx.snapshot.timestamp!r}")
+    if observed_at is None or observed_at.utcoffset() is None:
+        return None, f"unparseable snapshot timestamp {ctx.snapshot.timestamp!r}"
 
     snapshot_age_minutes = (ctx.now_et - observed_at).total_seconds() / 60.0
+    if snapshot_age_minutes < 0:
+        return None, "snapshot is later than the decision clock"
     if snapshot_age_minutes > max_snapshot_age:
-        return _decide_core(
-            ctx, None,
-            stale_source_reason=(
-                f"snapshot is {snapshot_age_minutes:.1f} minutes old "
-                f"(limit={max_snapshot_age}m) -- the collector looks stalled"
-            ),
+        return None, (
+            f"snapshot is {snapshot_age_minutes:.1f} minutes old "
+            f"(limit={max_snapshot_age}m) -- the collector looks stalled"
         )
 
     # A snapshot dated before the newest recorded reading starts a new replay
@@ -496,6 +504,9 @@ def _decide(ctx: StrategyContext) -> Decision:
     # for an identical same-day replay.
     if _last_observed_at is not None and observed_at.date() < _last_observed_at.date():
         _reset_state()
+
+    if _last_observed_at is not None and observed_at < _last_observed_at:
+        return None, "out-of-order snapshot precedes the latest observation"
 
     snapshot_key = (ctx.snapshot.timestamp, ctx.snapshot.sha256)
     if snapshot_key != _last_recorded_snapshot:
@@ -509,7 +520,12 @@ def _decide(ctx: StrategyContext) -> Decision:
         lookback_minutes=lookback_minutes,
         max_anchor_overshoot_minutes=max_overshoot,
     )
-    return _decide_core(ctx, signal)
+    return signal, None
+
+
+def _decide(ctx: StrategyContext) -> Decision:
+    signal, reason = observe_signal(ctx)
+    return _decide_core(ctx, signal, stale_source_reason=reason)
 
 
 _decide.strategy_id = STRATEGY_ID

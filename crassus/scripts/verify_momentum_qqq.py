@@ -432,8 +432,7 @@ def scenario_stale_source_while_positioned_retains_not_sells() -> None:
 
 
 def _reset_tracker() -> None:
-    mq._tracker = PriceHistoryTracker(retain_minutes=1440.0)
-    mq._last_recorded_snapshot = None
+    mq._reset_state()
 
 
 def scenario_decide_records_using_snapshot_timestamp_not_now_et() -> None:
