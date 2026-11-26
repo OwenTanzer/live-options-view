@@ -19,11 +19,13 @@ here are about evidence, not about risk:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from http.client import RemoteDisconnected
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +36,9 @@ from . import clock
 from .audit import Outcome
 from .config import BASE_URL, BOT_REGISTRATION_KEY
 from .market import intent_lineage
+from .observability import event
+
+log = logging.getLogger(__name__)
 
 
 class CrassusError(Exception):
@@ -63,6 +68,19 @@ class AccountLiquidated(CrassusError):
 
 class TransportError(CrassusError):
     outcome_class = Outcome.TRANSPORT_ERROR
+
+
+def _peer_closed_before_response(error: TransportError) -> bool:
+    # requests and urllib3 wrap the http.client exception. Follow the
+    # originating error instead of matching version-dependent message text.
+    cause = error.__cause__
+    if not isinstance(cause, requests.ConnectionError):
+        return False
+    while cause is not None:
+        if isinstance(cause, RemoteDisconnected):
+            return True
+        cause = cause.__cause__ or cause.__context__
+    return False
 
 
 class ConfigError(CrassusError):
@@ -332,11 +350,11 @@ class AccountSession:
 
     # -- plumbing ---------------------------------------------------------
 
-    def _request(self, method: str, path: str, **kw: Any) -> requests.Response:
+    def _request(self, method: str, path: str, *, timeout: float | None = None, **kw: Any) -> requests.Response:
         self.rate_limiter.acquire()
         url = f"{self.base_url}{path}"
         try:
-            resp = self.http.request(method, url, timeout=self.timeout_s, **kw)
+            resp = self.http.request(method, url, timeout=self.timeout_s if timeout is None else timeout, **kw)
         except requests.Timeout as exc:
             raise AmbiguousExecution(f"{method} {path} timed out: {exc}") from exc
         except requests.RequestException as exc:
@@ -573,7 +591,7 @@ class AccountSession:
         self._provision_history = history
         return delay
 
-    def me(self, *, _retry_after_reauth: bool = True) -> AccountState:
+    def me(self, *, _retry_after_reauth: bool = True, _retry_after_disconnect: bool = True) -> AccountState:
         """Authoritative account state, re-authenticating once if the session died.
 
         A Worker restart, a cleared session store, or simply session expiry
@@ -583,10 +601,21 @@ class AccountSession:
         a second 401 after a fresh login means the credentials are wrong, which
         is a configuration problem rather than something retrying can fix.
         """
-        resp = self._request("GET", "/api/me")
+        try:
+            resp = self._request("GET", "/api/me")
+        except TransportError as exc:
+            if not _retry_after_disconnect or not _peer_closed_before_response(exc):
+                raise
+            # The pool discards the disconnected socket. Charge the shared
+            # limiter again and retain the existing session cookie.
+            _retry_after_disconnect = False
+            event(log, "account_read_retry", account_alias=self.account.alias)
+            resp = self._request("GET", "/api/me", timeout=min(3.0, self.timeout_s))
+            event(log, "account_read_retry_response", account_alias=self.account.alias,
+                  http_status=resp.status_code)
         if resp.status_code == 401 and _retry_after_reauth:
             self._authenticate()
-            return self.me(_retry_after_reauth=False)
+            return self.me(_retry_after_reauth=False, _retry_after_disconnect=_retry_after_disconnect)
         if resp.status_code == 401:
             raise ConfigError(
                 f"Worker rejected {self.account.alias!r} even after a fresh login "
