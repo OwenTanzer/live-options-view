@@ -22,11 +22,11 @@ function at(value) {
 export function regimeComponents(selection, chain, flow, findPin) {
   const cutoff = selection.cutoff;
   const rows = [];
-  function add(name, value, observed, available, note = '') {
+  function add(name, value, observed, available, note = '', observedLabel = '') {
     const eligible = Number.isSafeInteger(observed) && observed <= cutoff
       && Number.isSafeInteger(available) && available <= cutoff && observed <= available;
     rows.push({name,value:eligible && value != null ? value : 'Unavailable',
-      observed:eligible ? observed : null,available:eligible ? available : null,
+      observed:eligible ? observed : null,observedLabel:eligible ? observedLabel : '',available:eligible ? available : null,
       note:eligible ? [note,cutoff-observed > 150000 ? 'retained' : ''].filter(Boolean).join(' · ') : ''});
   }
   const row = chain?.row;
@@ -44,9 +44,16 @@ export function regimeComponents(selection, chain, flow, findPin) {
   const skew = data?.market_readings?.find(r=>r.reading_id==='reference_oi_skew' && r.symbol===selection.instrument);
   const ratio = skew?.values?.imbalance_ratio;
   const published = at(skew?.published_at);
+  // Settled OI often has no provider event clock. The archive validates the
+  // reading's publication and input. Identify its calculation clock explicitly.
+  const calculated = at(skew?.calculated_at);
+  const useCalculation = skew?.observed_at === null && calculated !== null && calculated <= published
+    && skew.publication?.status === 'published' && skew.input?.snapshot_key_status === 'valid'
+    && skew.input.snapshot_key === data.snapshot_key && at(skew.input.snapshot_timestamp) === row.eventAt;
   add('Reference OI skew', skew?.status?.code==='ok' && Number.isFinite(ratio) && Math.abs(ratio)<=1 ? signed(ratio,3) : null,
-    at(skew?.observed_at),published===null ? null : Math.max(row.availableAt,published),
-    skew?.freshness?.status==='live' ? '' : skew?.freshness?.status);
+    useCalculation ? calculated : at(skew?.observed_at),published===null ? null : Math.max(row.availableAt,published),
+    [useCalculation && 'OI observation time unknown', skew?.freshness?.status === 'live' ? '' : skew?.freshness?.status].filter(Boolean).join(' · '),
+    useCalculation ? 'Calculated' : '');
   const f = flow?.row, fv = f?.value;
   const total = fv ? fv.bullish+fv.bearish : 0;
   add('Session signed flow',total>0 ? signed(100*(fv.bullish-fv.bearish)/total,1)+'%' : null,
