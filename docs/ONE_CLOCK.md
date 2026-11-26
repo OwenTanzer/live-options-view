@@ -571,6 +571,18 @@ with the underlying midpoint, bid/ask and optional trade range. Select a
 100-millisecond interval or a one-second bin for the signed-contract imbalance,
 subsequent one-second price response and tape. Use the receipt cutoff to replay
 what had arrived by that instant. The bundled Nov 13 sample opens offline.
+
+A premium lane shares the same receipt-time axis. For each interval it plots
+the size-weighted change in option print price, in dollars per share, measured
+from each contract's first print received in the displayed minute through the
+cutoff, so later prints never move an earlier anchor. Calls and puts are
+separate paths; whiskers span the interval's lowest to highest change, and
+paths never join across a recorded outage. Every priced print counts whether
+or not it was quote-signed. With all strikes selected the lane averages changes
+across contracts, so select a strike to follow a single call and put. The
+inspected interval's readout lists contracts, mean and range of change,
+premium traded and the last print. Premium is shown beside the flow only and
+is not an Alkalus input.
 See [Tradier operations](../market_data/tradier/OPERATIONS.md#qqq-intraminute-order-flow)
 for source coverage and live activation.
 
@@ -585,9 +597,10 @@ retrospective (13-minute hold, +18.39%, classified working copper; holding
 toward $733 would have been a new wager). The taxonomy classifies time inside
 a convex position by what the held interval actually converted risk into, not
 by duration and not by the move after exit. This drilldown applies it to
-option *flow*, descriptively only: it carries no option premium repricing, so
-there is no theta, convexity payoff, or entry friction to measure, and the
-label is not a trading signal.
+option *flow*, descriptively only. The premium lane shows print-level
+repricing across contracts, not a held position, so the classification still
+has no theta, convexity payoff, or entry friction to measure, and the label is
+not a trading signal.
 
 Inputs, all from the owned interval only: the first-to-last observed quote
 midpoint displacement inside the bin, the bin's last observed quote spread

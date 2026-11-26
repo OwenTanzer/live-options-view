@@ -1,4 +1,4 @@
-import {model,receiptMinute,flowResponse,alkalusFlow} from '../shared/intraminute.js';
+import {model,receiptMinute,flowResponse,alkalusFlow,premiumChange} from '../shared/intraminute.js';
 
 const $=id=>document.getElementById(id);
 const sample=1794580560000, api='/api/one-clock/intraminute';
@@ -28,7 +28,7 @@ function paint() {
   const result=model(rows,{minute,cutoff,width,strike:selected});
   data=result;strikes();
   const {bins,gaps}=result;
-  const canvas=$('plot'), w=Math.max(320,canvas.clientWidth), h=390, scale=devicePixelRatio||1;
+  const canvas=$('plot'), w=Math.max(320,canvas.clientWidth), h=500, scale=devicePixelRatio||1;
   canvas.width=w*scale; canvas.height=h*scale;
   const c=canvas.getContext('2d'); c.scale(scale,scale);
   const left=60,right=w-15,span=right-left;
@@ -39,9 +39,9 @@ function paint() {
   for(const [start,end] of gaps) {
     const a=Math.max(left,x((start-minute)/width)), b=Math.min(right,x((end-minute)/width));
     if(b<=a)continue;
-    c.fillStyle='#48404a';c.fillRect(a,0,b-a,365);
-    c.save();c.beginPath();c.rect(a,0,b-a,365);c.clip();
-    for(let i=a-360;i<b;i+=14)line(i,365,i+365,0,'#625261');c.restore();
+    c.fillStyle='#48404a';c.fillRect(a,0,b-a,475);
+    c.save();c.beginPath();c.rect(a,0,b-a,475);c.clip();
+    for(let i=a-470;i<b;i+=14)line(i,475,i+475,0,'#625261');c.restore();
   }
   const max=Math.max(1,...bins.flatMap(b=>[...b.C,...b.P]));
   for(const [kind,title,base] of [['C','Calls',55],['P','Puts',139]]) {
@@ -62,10 +62,30 @@ function paint() {
     c.fillStyle=dy>=0?'#46bea0':'#f39785';
     c.fillRect(x(i),Math.min(204,204-dy),Math.max(.7,span/bins.length),Math.abs(dy));
   });
+  // Premium lane: size-weighted change from each contract's first print this
+  // minute, calls and puts as separate paths on the shared receipt-time axis.
+  const premiumTop=232, premiumZero=274, premiumHalf=34;
+  const changes=bins.flatMap(b=>['C','P'].map(t=>premiumChange(b,t))).filter(Number.isFinite);
+  const premiumMax=Math.max(.01,...changes.map(Math.abs));
+  label('Premium Δ',3,premiumTop);label('+'+premiumMax.toFixed(2),3,premiumTop+14);label('−'+premiumMax.toFixed(2),3,premiumZero+premiumHalf);
+  line(left,premiumZero,right,premiumZero,'#63717c');
+  const py=v=>premiumZero-v/premiumMax*premiumHalf;
+  for(const [type,color] of [['C','#e58fd0'],['P','#7fc8f8']]) {
+    let prev=null;
+    bins.forEach((b,i)=>{
+      const v=premiumChange(b,type);
+      if(v===null)return;
+      const xx=x(i+.5), p=b.premium[type];
+      if(p.max>p.min)line(xx,py(p.max),xx,py(p.min),color+'66');
+      const gap=prev && gaps.some(([a,z])=>a<minute+(i+1)*width && z>minute+prev.i*width);
+      if(prev && !gap)line(x(prev.i+.5),py(prev.v),xx,py(v),color);
+      c.fillStyle=color;c.fillRect(xx-1.5,py(v)-1.5,3,3);prev={i,v};
+    });
+  }
   const prices=bins.flatMap(b=>[b.bid,b.ask,...($('trades').checked?[b.low,b.high]:[])]).filter(Number.isFinite);
   if(prices.length) {
-    const hi=Math.max(...prices)+.005,lo=Math.min(...prices)-.005,y=v=>348-(v-lo)/(hi-lo)*103;
-    label('QQQ',3,232);label(hi.toFixed(2),3,249);label(lo.toFixed(2),3,349);
+    const hi=Math.max(...prices)+.005,lo=Math.min(...prices)-.005,y=v=>458-(v-lo)/(hi-lo)*103;
+    label('QQQ',3,342);label(hi.toFixed(2),3,359);label(lo.toFixed(2),3,459);
     let prev=null;
     bins.forEach((b,i)=>{
       if(b.bid!==undefined){
@@ -77,9 +97,9 @@ function paint() {
       if($('trades').checked && b.low!==undefined)line(x(i+.5),y(b.low),x(i+.5),y(b.high)+1,'#c4b7eb');
     });
   }
-  for(let s=0;s<=60;s+=10)label(s+'s',Math.min(right-16,x(s*1000/width)),380);
+  for(let s=0;s<=60;s+=10)label(s+'s',Math.min(right-16,x(s*1000/width)),490);
   const sec=Number($('detail').value);
-  if(Number.isInteger(sec)&&sec>=0&&sec<60)line(x(sec*1000/width),17,x(sec*1000/width),358,'#eee');
+  if(Number.isInteger(sec)&&sec>=0&&sec<60)line(x(sec*1000/width),17,x(sec*1000/width),468,'#eee');
   $('clock').textContent=time(cutoff);
   $('summary').textContent=result.calls.toLocaleString()+' call contracts · '+result.puts.toLocaleString()+' put contracts · '+result.signed.toLocaleString()+' quote-signed · '+result.unknown.toLocaleString()+' unclassified';
   inspect(sec);
@@ -103,6 +123,11 @@ function inspect(second) {
     $('next-second').textContent='Next-second observation — not part of this interval’s classification: midpoint change one second later '+(flow.response===null?'unavailable':(flow.response>=0?'+':'')+flow.response.toFixed(3));
   }
   const bucket=data.bins[index];
+  $('premium').textContent=bucket?'Premium in this interval — observed print repricing, not a position payoff or an Alkalus input · '+['C','P'].map(type=>{
+    const v=premiumChange(bucket,type), p=bucket.premium[type], name=type==='C'?'calls':'puts';
+    if(v===null)return name+': no priced prints';
+    return name+': '+p.contracts+' contracts · mean Δ '+(v>=0?'+':'')+v.toFixed(3)+' vs each contract’s first print this minute (range '+(p.min>=0?'+':'')+p.min.toFixed(2)+' to '+(p.max>=0?'+':'')+p.max.toFixed(2)+') · $'+Math.round(p.notional).toLocaleString()+' premium · last '+p.last.symbol+' @ '+p.last.price.toFixed(2);
+  }).join(' · '):'';
   if(bucket?.first) $('response').textContent+=' · QQQ trades O '+bucket.first.price+' / H '+bucket.high+' / L '+bucket.low+' / C '+bucket.last.price+' · '+bucket.shares+' shares';
   const body=$('rows');body.replaceChildren();
   for(const r of slice){
