@@ -266,6 +266,8 @@ Each session uses fresh episode state, retained per account across restarts.
 Both accounts are initially inactive. Each requires its own paper credential
 and explicit runtime roster activation. They have no broker route.
 
+**Newton Max Pain** (`max_pain_newton_qqq`) uses Regular Max Pain’s option selection and exit policy. An entry needs Regular Newton’s trailing direction to agree at that decision. The example paper account starts inactive.
+
 **Bowman Max Pain** (`bowman_max_pain_qqq`) is a separate, initially inactive
 QQQ paper account. Its Bowman displacement must point toward the Max Pain
 strike for entry. It uses the base pin distance (strictly over 0.15% of spot)

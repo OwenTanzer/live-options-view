@@ -14,6 +14,7 @@ from . import canopus_down_day  # noqa: F401
 from . import looking_glass_straddle  # noqa: F401
 from . import me_bots  # noqa: F401
 from . import max_pain  # noqa: F401
+from . import max_pain_newton  # noqa: F401
 from . import max_pain_episodes  # noqa: F401
 from . import momentum_puts_only  # noqa: F401
 from . import momentum_qqq  # noqa: F401

@@ -109,6 +109,7 @@ DEFAULT_COVERED = frozenset({
     "momentum_puts_only_qqq",
     "momentum_puts_only_qqq_phelps",
     "max_pain_qqq",
+    "max_pain_newton_qqq",
     "oi_skew_qqq",
     "put_call_ratio_qqq",
     "phelps_pure_qqq",
