@@ -178,6 +178,23 @@ anchor. `StrategyContext.account_alias` carries the runner's account identity;
 behavior, including two same-band accounts and one different-band account in
 one process.
 
+**Absolute OI Skew** is a separate QQQ paper account using the same registered
+strategy as OI Skew. The loader inherits the parent account's effective
+parameters, then sets the minimum movement from the session-start imbalance
+to zero. On each fresh observation the absolute imbalance alone can qualify
+a direction. Band coverage, quote checks, exit policy and flattening still
+apply. Each account has its own balance, ledger identity and tracker.
+
+For a paper rollout, provision `CRASSUS_PW_OI_SKEW_ABSOLUTE` and activate
+`crassus_oiskew_absolute` in the runner's paper roster following the
+[provisioning procedure](docs/2026-11-bot-provisioning.md). For a private
+catalog overlay, set `active: true` on this username. If using an explicit
+`CRASSUS_ACCOUNTS_FILE`, include the full catalog row with that flag in the
+configured file alongside the parent. Run
+`python scripts/preflight_accounts.py --probe` from `crassus/` with the
+target roster and environment before starting the paper runner. Verify the
+distinct username and its first decision on rollout.
+
 ## Account ↔ strategy mapping (target, once P3 lands)
 
 | Account | Strategy | |

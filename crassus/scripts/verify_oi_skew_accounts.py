@@ -17,13 +17,18 @@ single-account contexts (`scripts/verify_oi_skew.py` proves that older path).
 
 from __future__ import annotations
 
+import json
 import sys
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import crassus.strategies  # noqa: E402,F401  (registers every strategy id)
+from crassus.config import DEFAULT_ACCOUNTS_CATALOG, load_accounts
+from crassus.exits import resolve_policy
 from crassus.client import Book  # noqa: E402
 from crassus.market import MarketSnapshot, Quote  # noqa: E402
 from crassus.replay import registered_strategy_ids, reset_strategy_state  # noqa: E402
@@ -148,6 +153,44 @@ check("reset re-anchors an independent replay", "not newer" not in replayed["rea
       replayed["reason"][:80])
 check("oi_skew_qqq registers a state resetter",
       "oi_skew_qqq" in set(registered_strategy_ids()), str(registered_strategy_ids()))
+
+
+# Exercise the same loader and registered strategy as a private paper roster.
+# Dummy credentials exist only in this test. The parent also carries a
+# non-default cutoff and stop so accidental fallback to defaults is visible.
+catalog = json.loads(DEFAULT_ACCOUNTS_CATALOG.read_text())["accounts"]
+parent, absolute = [next(e for e in catalog if e["username"] == name)
+                    for name in ("crassus_oiskew", "crassus_oiskew_absolute")]
+check("paper sibling is dormant and has its own credential",
+      absolute["active"] is False and absolute["password_env"] != parent["password_env"])
+parent = {**parent, "params": {"imbalance_threshold": 0.5, "exits": {"stop_loss_pct": -0.35}}}
+with TemporaryDirectory() as tmp, patch.dict("os.environ", {
+        parent["password_env"]: "fixture-parent", absolute["password_env"]: "fixture-absolute",
+        "CRASSUS_NEWTON_CONFIRMED": "0"}):
+    roster = Path(tmp) / "accounts.json"
+    roster.write_text(json.dumps({"accounts": [parent, absolute]}))
+    check("inactive challenger stays out of the runtime roster", len(load_accounts(roster)) == 1)
+    roster.write_text(json.dumps({"accounts": [parent, {**absolute, "active": True}]}))
+    control, challenger = load_accounts(roster)
+
+check("configured absolute cutoff and risk policy are inherited",
+      challenger.params["imbalance_threshold"] == 0.5
+      and resolve_policy(challenger.strategy_id, challenger.params, activated=True)
+      == resolve_policy(control.strategy_id, control.params, activated=True))
+for call_oi, put_oi, letter in ((300, 100, "C"), (100, 300, "P")):
+    reset_strategy_state()
+    snap = oi_snapshot(_ts(45), call_oi, put_oi)
+    ctx = ctx_for(snap, challenger.params, alias=challenger.alias)
+    control_ctx = ctx_for(snap, control.params, alias=control.alias)
+    signal = REGISTRY[challenger.strategy_id]
+    opening = signal(ctx)
+    check(f"{letter} at exact absolute cutoff enters on the opening reading",
+          opening.action == "buy" and opening.symbol == f"QQQ260101{letter}00400000"
+          and opening.metadata["delta_from_session_start"] == 0)
+    check("matched parent requires movement", signal(control_ctx).action == "no_trade")
+    check("duplicate snapshot cannot re-enter", signal(ctx).action == "no_trade")
+    flat = signal(ctx_for(oi_snapshot(_ts(50), 140, 60), challenger.params, alias=challenger.alias))
+    check("0.40 imbalance below the configured 0.50 cutoff cannot enter", flat.action == "no_trade")
 
 
 print()
