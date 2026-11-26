@@ -290,6 +290,9 @@ class AccountState:
     account_closed: bool = False
     closure_reason: str | None = None
     trade_history_present: bool = True
+    starting_balance: float | None = None
+    is_bot: bool = False
+    valuation_complete: bool = False
 
     def summary(self) -> dict[str, Any]:
         """Compact form for the audit record.
@@ -302,6 +305,7 @@ class AccountState:
         return {
             "username": self.username,
             "balance_cash": self.balance_cash,
+            "starting_balance": self.starting_balance,
             "trade_count": len(self.trades),
             **({"trade_history_present": False} if not self.trade_history_present else {}),
             "fetched_at": self.fetched_at,
@@ -339,6 +343,8 @@ class AccountSession:
         self.timeout_s = timeout_s
         self.http = requests.Session()
         self.liquidated = False
+        self.registration_allowed = True
+        self.recovery_reduce_only = False
         self._mutation_lock = threading.Lock()
         # Bounded provisioning state. `_now` is monotonic and injectable so the
         # backoff is testable without sleeping.
@@ -510,6 +516,8 @@ class AccountSession:
 
     def _provision(self) -> None:
         """One bounded registration attempt, with backoff and a mismatch cooldown."""
+        if not self.registration_allowed:
+            raise ConfigError("Loss-retired account cannot be provisioned again.")
         now = self._now()
         if now < self._credential_mismatch_until:
             raise ConfigError(
@@ -637,6 +645,11 @@ class AccountSession:
             trade_history_present=isinstance(payload.get("trades"), list),
             account_closed=payload.get("account_closed") is True,
             closure_reason=payload.get("closure_reason"),
+            starting_balance=payload.get("starting_balance"),
+            is_bot=payload.get("is_bot") is True,
+            valuation_complete=(payload.get("trade_history_complete") is True
+                                and payload.get("username") == self.account.username
+                                and type(payload.get("balance_cash")) in (int, float)),
         )
 
 
@@ -763,6 +776,16 @@ class ExecutionClient:
 
         request_id = intent["execution_request_id"]
         state = self.session.me()
+        restricted = getattr(self.session, "recovery_reduce_only", False)
+        if restricted:
+            from .retirement import verified_book, reduces_only
+            book = verified_book(state, self.session.account.username)
+            if book is None:
+                return ExecutionResult(
+                    outcome_class=Outcome.AMBIGUOUS, execution_request_id=request_id,
+                    state_after=state,
+                    note="Loss retirement restriction: pending intent retained; account history is unverified.",
+                )
         found = self.find_trade(request_id, state)
         if found:
             return ExecutionResult(
@@ -772,6 +795,17 @@ class ExecutionClient:
                 state_after=state,
                 note="Recovered in-flight intent: server already holds this trade; not resubmitted.",
             )
+
+        if restricted:
+            from types import SimpleNamespace
+            proposal = SimpleNamespace(symbol=intent.get("symbol"), action=intent.get("side"),
+                                       quantity=intent.get("quantity"))
+            if not reduces_only(proposal, book):
+                return ExecutionResult(
+                    outcome_class=Outcome.AMBIGUOUS, execution_request_id=request_id,
+                    state_after=state,
+                    note="Loss retirement restriction: pending intent retained; replay is not a verified reduction.",
+                )
 
         result = self.submit(
             symbol=intent["symbol"],

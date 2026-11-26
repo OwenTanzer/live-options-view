@@ -123,6 +123,42 @@ Kill switch: `Ctrl-C`, `SIGTERM`, or `touch state/STOP`.
 
 ## Integrity invariants
 
+### Automatic loss retirement
+
+The paper runner permanently stops new exposure when a verified account return
+is **strictly below -99%**. Exactly -99% does not trigger. As in the Automated
+panel, net equity is cash plus every signed open position at bid/ask midpoint,
+with the instrument multiplier; return is `(equity - starting_balance) /
+starting_balance`. It uses the actual authenticated account seed and complete
+trade history, never UI rounding, a default seed, cash alone with open positions,
+or partial marks. Both quote sides and their timestamps must be valid, not
+future dated and at most 60 seconds old. Unsupported instruments, filtered
+history, missing fields and quote outages cannot establish a new retirement.
+
+The durable `loss-retirement-<identity hash>.json` receipt on the existing state
+volume retains the valuation and origin/username identity. It is written before
+any further decision; repeated visits and restarts reuse it even if equity
+recovers. Do not remove receipts during routine deployment. An unreadable receipt
+restricts only the affected account, preserves the unreadable file and emits a
+`loss_retirement_receipt_error` operational event. Receipt read/write errors do
+not terminate startup or the shared cycle. That account cannot open exposure or
+register again; verified reduce-only strategy exits can continue. Pending fills
+still reconcile, but an absent pending order can replay only as a verified
+position reduction. Unverified books hold orders while healthy accounts continue.
+Retired identities cannot register again. This is a runner entry
+stop, not Worker account closure: it does not erase history, move funds, reseed,
+or liquidate. Existing strategy, protective and scheduled exits continue until
+flat; each proposed order must strictly reduce an existing position without
+flipping it. Pending execution reconciliation precedes the new threshold check.
+The receipt accompanies subsequent ledger decisions. Dry runs do not persist it.
+
+The API must expose `starting_balance`, `is_bot` and `trade_history_complete`
+on `/api/me` before new retirements can be established. Older API responses
+remain compatible but cannot certify this threshold. Backend and runner release
+lanes are separate; merging this patch alone does not deploy the API. This PR
+does not activate or modify a strategy. Verify locally with
+`python scripts/verify_loss_retirement.py` (POSIX persistence, mocked transport).
+
 Enforced in `client.py`, each verified by a scenario in `verify_invariants.py`:
 
 1. **`execution_request_id` is written to disk and fsynced before the request is sent.** A timeout must not erase the identity needed to determine whether the trade happened.

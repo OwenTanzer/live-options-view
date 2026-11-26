@@ -33,6 +33,7 @@ from typing import Any
 
 from . import clock, strategies  # noqa: F401  (import registers strategies)
 from .audit import DecisionLedger, Outcome
+from .retirement import LossRetirement, verified_value, verified_book, reduces_only
 from .archive import from_environment as archive_from_environment
 from .oi_skew_publisher import from_environment as oi_skew_publisher_from_environment
 from .bs_edge import annotate_buy_decision
@@ -257,6 +258,8 @@ class Runner:
         self.quotes = QuoteReader(base_url, rate_limiter=self.rate_limiter)
 
         self.sessions: dict[str, AccountSession] = {}
+        self.loss_retirement = LossRetirement(self.state_dir, base_url)
+        self.loss_restrictions = {}
         self.executors: dict[str, ExecutionClient] = {}
         for account in accounts:
             session = AccountSession(
@@ -266,6 +269,9 @@ class Runner:
                 bot_registration_key=key,
             )
             self.sessions[account.alias] = session
+            restricted = self._loss_receipt(account) is not None
+            session.registration_allowed = not restricted
+            session.recovery_reduce_only = restricted
             self.executors[account.alias] = ExecutionClient(session, self.state_dir)
 
         self._stop = threading.Event()
@@ -308,6 +314,9 @@ class Runner:
         log.info("run_id=%s ledger=%s", self.ledger.run_id, self.ledger.paths.ledger)
         for account in self.accounts:
             session = self.sessions[account.alias]
+            if getattr(self, "loss_retirement", None) is not None and self._loss_receipt(account) is not None:
+                session.registration_allowed = False
+                session.recovery_reduce_only = True
             try:
                 state = session.ensure_session()
                 log.info(
@@ -527,6 +536,25 @@ class Runner:
         self.retired.add(account.alias)
         log.warning("%s retired: %s", account.alias, reason)
 
+    def _loss_error(self, account: Any, exc: Exception, operation: str) -> dict:
+        restriction = {"status": "receipt_unavailable", "operation": operation,
+                       "error_type": type(exc).__name__}
+        if self.loss_restrictions.get(account.username) != restriction:
+            event(log, "loss_retirement_receipt_error", level=logging.ERROR,
+                  account_alias=account.alias, **restriction)
+        self.loss_restrictions[account.username] = restriction
+        return restriction
+
+    def _loss_receipt(self, account: Any) -> dict | None:
+        try:
+            receipt = self.loss_retirement.read(account.username)
+        except (OSError, ValueError, TypeError) as exc:
+            return self._loss_error(account, exc, "read")
+        if receipt is not None:
+            self.loss_restrictions[account.username] = receipt
+        # Disappearance after a read/write error is not clearance to reopen.
+        return receipt or self.loss_restrictions.get(account.username)
+
     def _retire_closed(self, account: Any, state: Any, snapshot: Any = None) -> None:
         self.ledger.record(
             decision_id=self.ledger.new_decision_id(), account_alias=account.alias,
@@ -545,6 +573,11 @@ class Runner:
     def _run_account(self, account: Any, snapshot: Any, phase: str) -> None:
         alias = account.alias
         session = self.sessions[alias]
+        loss_store = getattr(self, "loss_retirement", None)
+        retirement = self._loss_receipt(account) if loss_store is not None else None
+        if retirement is not None:
+            session.registration_allowed = False
+            session.recovery_reduce_only = True
         executor = self.executors[alias]
         decision_id = self.ledger.new_decision_id()
         strategy = get_strategy(account.strategy_id)
@@ -594,8 +627,40 @@ class Runner:
             self._retire_closed(account, state, snapshot)
             return
 
+        if retirement is not None and verified_book(state, account.username) is None:
+            self.ledger.record(**base, outcome_class=Outcome.NO_TRADE,
+                               loss_retirement=retirement,
+                               reason="Loss retirement restriction: no verified position book; orders held.")
+            return
         book = Book(state.trades)
         state_before = {**state.summary(), **book.summary()}
+
+        if loss_store is not None:
+            if retirement is None and state.username == account.username:
+                try:
+                    value = verified_value(state, book, self.quotes.quotes)
+                except Exception as exc:
+                    # A mark outage must not prevent an already-authorized exit.
+                    base["retirement_valuation_error"] = type(exc).__name__
+                    value = None
+                if value is not None and value["below_threshold"]:
+                    try:
+                        retirement = ({"valuation": value, "dry_run": True} if self.dry_run
+                                      else loss_store.record(account.username, value))
+                    except (OSError, ValueError, TypeError) as exc:
+                        retirement = self._loss_error(account, exc, "write")
+            if retirement is not None:
+                session.registration_allowed = False
+                session.recovery_reduce_only = True
+                base["loss_retirement"] = retirement
+                if (book.is_flat and state.username == account.username
+                        and retirement.get("status") != "receipt_unavailable"
+                        and verified_value(state, book, lambda _: {}) is not None):
+                    self.ledger.record(**base, outcome_class=Outcome.NO_TRADE,
+                                       account_state_before=state_before,
+                                       reason="Account return below -99%; permanently retired, flat.")
+                    self._retire(account, "Verified return below -99%; flat.")
+                    return
 
         observed_quotes: dict[str, Any] = {}
 
@@ -722,6 +787,11 @@ class Runner:
                 account_state_before=state_before,
             )
             return
+
+        if retirement is not None and decision.is_trade and (
+                verified_book(state, account.username) is None or not reduces_only(decision, book)):
+            decision = Decision.no_trade("Loss retirement blocks new or increased exposure.",
+                                         decision.strategy_id, decision.strategy_version)
 
         if arm:
             if arm == "baseline" and decision.action == "buy":
