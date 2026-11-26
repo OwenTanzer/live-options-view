@@ -390,7 +390,7 @@ def momentum_windows(history, *, now, session, bounds, observed, spot, day_open,
                     key=lambda p: p.observed_at)
     times = [p.observed_at for p in points]
     for minutes in (5, 9, 15, 30, 60):
-        target = now - timedelta(minutes=minutes)
+        target = observed - timedelta(minutes=minutes)
         index = bisect_right(times, target) - 1
         key = f"{minutes}m"
         if index < 0:

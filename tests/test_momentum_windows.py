@@ -25,6 +25,14 @@ class Windows(unittest.TestCase):
         self.assertEqual(r["15m"]["status"], "warming_up")
         self.assertEqual(r["60m"]["status"], "warming_up")
 
+    def test_unchanged_spot_has_unchanged_window_when_snapshot_clock_advances(self):
+        points = [(4, 100), (5, 105)]
+        first = self.readings(9, points, observed=9)
+        later = self.readings(10, points, observed=9)
+        self.assertEqual(first["5m"], later["5m"])
+        self.assertEqual(first["5m"]["return_pct"], 10)
+        self.assertEqual(self.readings(5, [(0, 100)], observed=4)["5m"]["status"], "warming_up")
+
     def test_gaps_restart_and_session_boundary(self):
         self.assertEqual(self.readings(100, [(0, 100)])["5m"]["status"], "stale_anchor")
         self.assertEqual(self.readings(100, [])["session"]["return_pct"], 10)
