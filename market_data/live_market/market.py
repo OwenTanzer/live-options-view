@@ -36,6 +36,7 @@ from .config import (
     _session_bounds,
     log,
 )
+from .option_sensitivities import current_event, model_greeks, years_to_reference_close
 from .feed import DXLinkFeed
 from .one_clock import INSTRUMENTS as ONE_CLOCK_INSTRUMENTS
 from .quotes import _fresh_spy_spot, _observed_spy_price_with_basis, _provider_observed_spy_price, _spy_subscription_coverage
@@ -477,6 +478,10 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
     underlying_market = _compute_underlying_market(
         s3, quote, underlying, spot_ts_str, ts_et, ts_utc, today, us, selection)
 
+    years = years_to_reference_close(exp_date, ts_utc)
+    model_spot = (underlying if provider_times and all(current_event(t, ts_utc) for t in provider_times)
+                  and underlying_market["freshness"] == "live" else None)
+
     rows = []
     for s in strikes:
         strike = s["strike"]
@@ -518,6 +523,9 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
                 "Theta":           data.get("theta"),
                 "Vega":            data.get("vega"),
                 "UnderlyingPrice": underlying,
+                "IVObservedAt":    data.get("iv_observed_at"),
+                **model_greeks(model_spot, strike, data.get("volatility") if current_event(
+                    data.get("iv_observed_at"), ts_utc) else None, years),
                 **price_cols,
             })
 
