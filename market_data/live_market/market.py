@@ -125,6 +125,20 @@ def _compute_underlying_market(s3, qqq: dict, underlying: float | None, spot_ts_
         "source": "dxlink",
         "freshness": freshness,
     }
+    if us.symbol == "QQQ":
+        from .weekly import _weekly_session_bounds
+        try:
+            bounds = _weekly_session_bounds(today)
+        except Exception:
+            log.warning("Momentum session calendar unavailable for %s", today)
+            bounds = None
+        block["momentum_windows"] = ms.momentum_windows(
+            us.momentum_history, now=ts_utc, session=today, bounds=bounds,
+            observed=spot_observed_at, spot=underlying,
+            day_open=qqq.get("day_open") if qqq.get("day_open_date") == today.isoformat() else None,
+            max_age_seconds=STALE_FEED_SECS, max_overshoot=MOMENTUM_MAX_ANCHOR_OVERSHOOT_MIN,
+            neutral_band=MOMENTUM_NEUTRAL_BAND_PCT,
+        )
     if selection is not None:
         block["provenance"] = {**selection.as_provenance(), "freshness": freshness}
     return block
