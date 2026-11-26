@@ -1650,6 +1650,12 @@
 <div id="clock-navigation" hidden>
   <label>Session clock <select id="clock-mode"><option value="live">Live · now</option><option value="replay">Replay · fixed cursor</option></select></label>
   <span id="clock-scope" role="status"></span>
+  <details id="clock-regime">
+    <summary>Market regime</summary>
+    <button type="button">Refresh readings</button>
+    <p role="status"></p>
+    <div style="overflow:auto"><table><thead><tr><th>Component</th><th>Reading</th><th>Observed (ET)</th><th>Available (ET)</th></tr></thead><tbody></tbody></table></div>
+  </details>
 </div>
   <section id="history-clock" hidden aria-label="Shared session cursor">
     <form id="history-clock-form" style="display:flex;gap:12px;flex-wrap:wrap;align-items:end">

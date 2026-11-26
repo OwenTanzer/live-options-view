@@ -1,4 +1,5 @@
 import {archiveHistory} from './archive-history.js';
+import {regimeFlow} from './one-clock-regime-flow.js';
 import {intraminute} from './one-clock-intraminute.js';
 import {handleOpeningOi} from "./one-clock-opening-oi.js";
 import { archive } from './strategy-archive.js';
@@ -45,6 +46,7 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === '/api/archive-history') return archiveHistory(request, env);
+    if (url.pathname === '/api/one-clock/regime-flow') return regimeFlow(request,env,url);
     if (url.pathname === '/api/one-clock/intraminute') return intraminute(request,env,url);
     if (url.pathname === '/api/kalshi' || url.pathname.startsWith('/api/kalshi/')) return handleKalshi(request, env);
     if (url.pathname === '/api/one-clock/btc-replay') return handleBitcoinReplay(request,env);

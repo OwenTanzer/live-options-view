@@ -228,6 +228,33 @@ class LabelTests(unittest.TestCase):
         self.quote(feed, 1.2, 1.2, t - 100, t - 90)
         self.assertEqual(self.trade(feed, 1, 1.2, t)["basis"], "locked")
 
+    def test_regime_publish_retries_frozen_minute_after_quiet_rollover(self):
+        feed = recent.RecentPrints()
+        self.trade(feed, 1, 1.00, self.T0 + 1000)
+        stop = Mock()
+        stop.wait.side_effect = [False, False, False, True]
+        client = Mock()
+        client.put_object.side_effect = [None, OSError("minute write interrupted"), None]
+        # First sample lies just before rollover. No successor print arrives.
+        clock = Mock(side_effect=[self.T0 + 59999, self.T0 + 63000])
+        feed.publish(client, "bucket", stop, Event(), now_ms=clock)
+        writes = [c.kwargs for c in client.put_object.call_args_list]
+        self.assertEqual(len(writes), 3)
+        self.assertEqual(writes[1], writes[2])
+        self.assertEqual(writes[2]["IfNoneMatch"], "*")
+        self.assertEqual(json.loads(writes[2]["Body"])["capturedAt"], self.T0 + 59999)
+
+    def test_regime_flow_uses_only_quote_signed_contracts_and_marks_incomplete_history(self):
+        now = self.T0 + 5000
+        session = {"day":datetime.fromtimestamp(now/1000, recent.ET).date().isoformat(), "last":now-5,
+                   "contracts":{"QQQ261125C00600000":{"label":{"q1":[5,2],"q5":[1,0],"low":[1,3],"U":2}},
+                                "QQQ261125P00600000":{"label":{"q1":[2,6],"q5":[0,1],"low":[0,0],"U":1}}},
+                   "gaps":[{"reason":"restart"}],"rebuilt":{"status":"rebuilt"}}
+        sample = recent.minute_flow(session, now)
+        self.assertEqual((sample["bullish"],sample["bearish"],sample["unclassified"]), (13,4,7))
+        self.assertTrue(sample["partial"])
+        self.assertIsNone(recent.minute_flow(session, now-10))
+
     def test_session_label_totals_partition_volume_and_keep_bsu(self):
         feed = recent.RecentPrints()
         t = self.T0 + 5000

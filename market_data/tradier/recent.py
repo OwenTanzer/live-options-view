@@ -97,6 +97,28 @@ class Session:
                     gaps=[dict(g) for g in self.gaps], rebuilt=dict(self.rebuilt) if self.rebuilt else None)
 
 
+def minute_flow(session, captured_at):
+    """Freeze cumulative q1/q5 direction from the existing public session projection."""
+    if not session or not isinstance(session.get("last"), int):
+        return None
+    session_day = datetime.fromtimestamp(captured_at / 1000, ET).date().isoformat()
+    if session["day"] != session_day or session["last"] > captured_at:
+        return None
+    bull = bear = unclassified = 0
+    for symbol, contract in session["contracts"].items():
+        match = OPTION.fullmatch(symbol)
+        if not match:
+            return None
+        label = contract["label"]
+        buy, sell = (sum(label[tier][i] for tier in ("q1", "q5")) for i in (0, 1))
+        bull += buy if match[1] == "C" else sell
+        bear += sell if match[1] == "C" else buy
+        unclassified += sum(label["low"]) + label["U"]
+    return dict(session=session_day, capturedAt=captured_at, lastPrintAt=session["last"],
+                bullish=bull, bearish=bear, unclassified=unclassified,
+                partial=bool(session["gaps"]) or (session.get("rebuilt") or {}).get("status") != "rebuilt")
+
+
 class RecentPrints:
     def __init__(self, universe=None):
         universe = universe or {}
@@ -301,19 +323,41 @@ class RecentPrints:
                                                 reason="partial_strike_coverage_before_widening"))
         return dict(lastReceived=rows[-1]["t"] if rows else None, cap=self.rows.maxlen, rows=rows, session=session)
 
-    def publish(self, client, bucket, stop, lost):
+
+    def publish(self, client, bucket, stop, lost, *, now_ms=None):
+        now_ms = now_ms or (lambda: int(datetime.now(timezone.utc).timestamp() * 1000))
         sent = 0
+        captured_minute = None
+        pending = deque(maxlen=2)
         while not stop.wait(3) and not lost.is_set():
             with self.lock:
                 version = self.version
-            if version == sent:
-                continue
-            body = self.payload()
-            if not body["rows"] and not body["session"]:
-                continue
-            try:
-                client.put_object(Bucket=bucket, Key=KEY, ContentType="application/json",
-                                  CacheControl="no-store", Body=json.dumps(body, separators=(",", ":")).encode())
-                sent = version
-            except Exception as exc:
-                logging.warning("Recent QQQ snapshot failed: %s", type(exc).__name__)
+            if version != sent:
+                body = self.payload()
+                captured_at = now_ms()
+                if body["rows"] or body["session"]:
+                    try:
+                        client.put_object(Bucket=bucket, Key=KEY, ContentType="application/json",
+                                          CacheControl="no-store", Body=json.dumps(body, separators=(",", ":")).encode())
+                        sent = version
+                    except Exception as exc:
+                        logging.warning("Recent QQQ snapshot failed: %s", type(exc).__name__)
+                    minute = captured_at // 60000 * 60000
+                    if sent == version and minute != captured_minute:
+                        sample = minute_flow(body["session"], captured_at)
+                        if sample is not None:
+                            pending.append((minute, json.dumps(sample, separators=(",", ":")).encode(), 0))
+                            captured_minute = minute
+            # Retry the same frozen bytes and minute even when no new print
+            # arrives. Keep retries bounded and independent of the recent sink.
+            if pending:
+                minute, data, attempts = pending.popleft()
+                try:
+                    client.put_object(Bucket=bucket, Key=f"order-flow/qqq/regime/v1/{minute}.json",
+                                      Body=data, ContentType="application/json", IfNoneMatch="*")
+                except Exception as exc:
+                    status = getattr(exc, "response", {}).get("ResponseMetadata", {}).get("HTTPStatusCode")
+                    if status != 412:
+                        if attempts < 3:
+                            pending.append((minute, data, attempts + 1))
+                        logging.warning("QQQ regime sample failed: %s", type(exc).__name__)
