@@ -33,3 +33,27 @@ assert.deepEqual(values({...opts,cutoff:t+349},chain,flow),Array(5).fill('Unavai
 chain.value.rows[0].Volume=null; assert.equal(values(opts,chain,flow)[1],'Unavailable');
 assert.deepEqual(values(opts,null,null),Array(5).fill('Unavailable'));
 console.log('Regime source availability, cursor rewind, signed and missing components passed.');
+
+const archived = structuredClone(chain);
+archived.value.snapshot_key = 'intraday/20261125/snapshot.csv';
+const published = new Date(t + 100).toISOString();
+const source = Object.assign(archived.value.market_readings[0], {
+  observed_at: null, calculated_at: iso, published_at: published, publication: {status:'published'},
+  input: {snapshot_key:archived.value.snapshot_key, snapshot_key_status:'valid', snapshot_timestamp:iso},
+  values: {imbalance_ratio:-0.177725},
+});
+const skewAt = (cutoff=t+350) => regimeComponents({...opts,cutoff},{row:archived},null,()=>100)[2];
+assert.deepEqual(skewAt(),{name:'Reference OI skew',value:'-0.178',observed:t,observedLabel:'Calculated',
+  available:t+350,note:'OI observation time unknown'});
+assert.equal(skewAt(t+349).value,'Unavailable');
+source.published_at = new Date(t+400).toISOString();
+assert.equal(skewAt().value,'Unavailable');
+assert.equal(skewAt(t+400).available,t+400);
+source.published_at = published;
+for (const clock of ['invalid',new Date(t+500).toISOString(),undefined]) {
+  source.observed_at = clock;
+  assert.equal(skewAt().value,'Unavailable');
+}
+source.observed_at = null;
+source.input.snapshot_key = 'wrong';
+assert.equal(skewAt().value,'Unavailable');

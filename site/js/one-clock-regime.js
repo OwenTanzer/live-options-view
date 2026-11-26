@@ -44,7 +44,7 @@ export function mountRegime(clock) {
     for (const r of regimeComponents(scope,chain.value,flow.value,maxPainStrike)) {
       const tr=document.createElement('tr');
       const th=document.createElement('th'); th.scope='row'; th.textContent=r.name; tr.append(th);
-      for (const value of [[r.value,r.note].filter(Boolean).join(' · '),r.observed==null?'—':time.format(r.observed),
+      for (const value of [[r.value,r.note].filter(Boolean).join(' · '),r.observed==null?'—':[r.observedLabel,time.format(r.observed)].filter(Boolean).join(' '),
         r.available==null?'—':time.format(r.available)]) {
         const td=document.createElement('td'); td.textContent=value; tr.append(td);
       }
