@@ -85,6 +85,16 @@
       "strategy_id": "oi_skew_qqq"
     },
     {
+      "alias": "Absolute OI Skew",
+      "username": "crassus_oiskew_absolute",
+      "password_env": "CRASSUS_PW_OI_SKEW_ABSOLUTE",
+      "strategy_id": "oi_skew_qqq",
+      "active": false,
+      "params": {
+        "min_change_from_session_start": 0
+      }
+    },
+    {
       "alias": "Put-Call Ratio",
       "username": "crassus_putcall",
       "password_env": "CRASSUS_PW_PUT_CALL_RATIO",

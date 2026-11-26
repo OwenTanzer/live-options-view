@@ -143,6 +143,17 @@ def _entries_for(path: Path | None, catalog_path: Path, override_path: Path) -> 
     entries = _base_entries_for(path, catalog_path, override_path)
     if path is None and os.getenv("CRASSUS_PW_OA233") and not any(e["username"] == "crassus_oa233" for e in entries):
         entries.extend(e for e in _read_entries(catalog_path) if e["username"] == "crassus_oa233")
+    # The absolute QQQ challenger uses the configured parent's band, cutoff
+    # and protective exits, including private overrides. Credentials and
+    # activation remain separate for each paper account.
+    absolute = next((e for e in entries if e["username"] == "crassus_oiskew_absolute"), None)
+    if absolute is not None:
+        parent = next((e for e in entries if e["username"] == "crassus_oiskew"), {})
+        absolute["params"] = {
+            **parent.get("params", {}),
+            **absolute.get("params", {}),
+            "min_change_from_session_start": 0,
+        }
     if os.environ.get("CRASSUS_NEWTON_CONFIRMED") != "1":
         return entries
     control = next(entry for entry in entries if entry["username"] == "crassus_newton")
