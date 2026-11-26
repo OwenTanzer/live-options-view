@@ -366,6 +366,11 @@ def scenario_newton_entries_and_exits() -> None:
     d = step(60, 395.5)
     check("bearish Newton blocks pin call", d.action == "no_trade" and d.metadata["pin_direction"] == "call")
     check("stale board cannot confirm", step(72, 395.5, age=10).action == "no_trade")
+    reset_strategy_state(sid)
+    step(0, 390)
+    check("future board rejected before recording", step(60, 395.5, age=-10).action == "no_trade")
+    check("future rejection did not poison next real board", step(60, 395.5).action == "buy")
+    check("same-day rewind blocks entry", step(59, 395.5).action == "no_trade")
     held = [{"sym":occ(400,"call"),"side":"buy","qty":1,"price":1.0}]
     reset_strategy_state(sid)
     check("missing confirmation leaves parent hold", step(0, 395.5, held).action == "no_trade")

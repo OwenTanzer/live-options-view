@@ -487,14 +487,16 @@ def observe_signal(ctx: StrategyContext) -> tuple[MomentumSignal | None, str | N
     max_snapshot_age = params.get("max_snapshot_age_minutes", DEFAULT_MAX_SNAPSHOT_AGE_MINUTES)
 
     observed_at = _snapshot_observed_at(ctx.snapshot.timestamp)
-    if observed_at is None:
+    if observed_at is None or observed_at.utcoffset() is None:
         return None, f"unparseable snapshot timestamp {ctx.snapshot.timestamp!r}"
 
     snapshot_age_minutes = (ctx.now_et - observed_at).total_seconds() / 60.0
+    if snapshot_age_minutes < 0:
+        return None, "snapshot is later than the decision clock"
     if snapshot_age_minutes > max_snapshot_age:
         return None, (
-                f"snapshot is {snapshot_age_minutes:.1f} minutes old "
-                f"(limit={max_snapshot_age}m) -- the collector looks stalled"
+            f"snapshot is {snapshot_age_minutes:.1f} minutes old "
+            f"(limit={max_snapshot_age}m) -- the collector looks stalled"
         )
 
     # A snapshot dated before the newest recorded reading starts a new replay
@@ -502,6 +504,9 @@ def observe_signal(ctx: StrategyContext) -> tuple[MomentumSignal | None, str | N
     # for an identical same-day replay.
     if _last_observed_at is not None and observed_at.date() < _last_observed_at.date():
         _reset_state()
+
+    if _last_observed_at is not None and observed_at < _last_observed_at:
+        return None, "out-of-order snapshot precedes the latest observation"
 
     snapshot_key = (ctx.snapshot.timestamp, ctx.snapshot.sha256)
     if snapshot_key != _last_recorded_snapshot:
