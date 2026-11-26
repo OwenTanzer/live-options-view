@@ -109,3 +109,12 @@ assert.equal(card.children[1]['aria-label'],'5m down -1.75%');
 assert.equal(card.children[1].textContent,'5m ▼');
 render(strip,market,{at:NOW+150001});assert.equal(strip.dataset.state,'retained');
 render(strip,market,{at:NOW-1});assert.equal(strip.children[1].textContent,'5m —');
+
+const legacyCard = element();
+render(legacyCard,um(),{at:NOW,retained:true});
+assert.equal(legacyCard.dataset.state,'retained');
+assert.match(legacyCard.textContent,/\+0.42%.*retained/);
+render(legacyCard,um(),{at:NOW+5*3600000,retained:true});
+assert.equal(legacyCard.dataset.state,'closed');
+render(legacyCard,null,{at:NOW,retained:true});
+assert.equal(legacyCard.dataset.state,'fallback');

@@ -5,8 +5,10 @@ function paintMomentumStrip(el, market, {at = Date.now(), compact = false, retai
   const windows = market?.momentum_windows;
   if (!windows) {
     const legacy = formatMomentum(market, at);
-    el.textContent = legacy.text;
-    el.dataset.state = legacy.state;
+    const aged = at - Date.parse(market?.spot_ts) > 150000;
+    const keep = (retained || aged) && ['live','stale'].includes(legacy.state);
+    el.textContent = legacy.text + (keep ? ' · retained' : '');
+    el.dataset.state = keep ? 'retained' : legacy.state;
     el.removeAttribute('title');
     return;
   }

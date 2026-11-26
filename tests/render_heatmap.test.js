@@ -44,6 +44,7 @@ const sandbox = {
   liveQuotes: { get: sym => ({ bid: 1.1, ask: 1.2, sym }) },
   openTicket: (e, row) => { calls.openTicket.push([e, row]); },
   formatVwapRvol: () => ({ text: 'VWAP 600.50 · RVOL 1.20', state: 'live' }),
+  paintMomentumStrip: el => {el.textContent = 'MOM +0.40'; el.dataset.state = 'up';},
   formatMomentum: () => ({ text: 'MOM +0.40', state: 'up' }),
   formatChainSnapshot: sharedFormat.formatChainSnapshot,
   document: { getElementById: id => (els[id] ||= makeEl()) },

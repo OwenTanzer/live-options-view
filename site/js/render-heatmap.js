@@ -61,7 +61,7 @@ function renderHeatmap(data, symbol = 'QQQ', {retained = false} = {}) {
   vrEl.dataset.state = vr.state;
 
   const moEl = document.getElementById('momentum');
-  if (isQqq && underlying_market?.momentum_windows) {
+  if (isQqq) {
     paintMomentumStrip(moEl, underlying_market, {retained:retained || freshness.state === 'retained'});
   } else {
     const mo = formatMomentum(underlying_market);
