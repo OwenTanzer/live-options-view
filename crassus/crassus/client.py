@@ -326,6 +326,7 @@ class AccountSession:
         self.http = requests.Session()
         self.liquidated = False
         self.registration_allowed = True
+        self.recovery_reduce_only = False
         self._mutation_lock = threading.Lock()
         # Bounded provisioning state. `_now` is monotonic and injectable so the
         # backoff is testable without sleeping.
@@ -746,6 +747,16 @@ class ExecutionClient:
 
         request_id = intent["execution_request_id"]
         state = self.session.me()
+        restricted = getattr(self.session, "recovery_reduce_only", False)
+        if restricted:
+            from .retirement import verified_book, reduces_only
+            book = verified_book(state, self.session.account.username)
+            if book is None:
+                return ExecutionResult(
+                    outcome_class=Outcome.AMBIGUOUS, execution_request_id=request_id,
+                    state_after=state,
+                    note="Loss retirement restriction: pending intent retained; account history is unverified.",
+                )
         found = self.find_trade(request_id, state)
         if found:
             return ExecutionResult(
@@ -755,6 +766,17 @@ class ExecutionClient:
                 state_after=state,
                 note="Recovered in-flight intent: server already holds this trade; not resubmitted.",
             )
+
+        if restricted:
+            from types import SimpleNamespace
+            proposal = SimpleNamespace(symbol=intent.get("symbol"), action=intent.get("side"),
+                                       quantity=intent.get("quantity"))
+            if not reduces_only(proposal, book):
+                return ExecutionResult(
+                    outcome_class=Outcome.AMBIGUOUS, execution_request_id=request_id,
+                    state_after=state,
+                    note="Loss retirement restriction: pending intent retained; replay is not a verified reduction.",
+                )
 
         result = self.submit(
             symbol=intent["symbol"],

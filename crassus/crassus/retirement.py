@@ -32,12 +32,9 @@ def fresh(stamp, now):
         return False
 
 
-def verified_value(state, book, quotes):
-    """Return unrounded evidence or None; unsupported/incomplete inputs abstain."""
-    now = clock.now_utc()
-    cash, start = number(state.balance_cash), number(state.starting_balance)
-    if (not state.is_bot or not state.valuation_complete or not state.trade_history_present
-            or cash is None or start is None or start <= 0 or not fresh(state.fetched_at, now)):
+def position_multipliers(state):
+    """Validate the full history before trusting derived position quantities."""
+    if not isinstance(state.trades, list):
         return None
     multipliers = {}
     for trade in state.trades:
@@ -60,6 +57,28 @@ def verified_value(state, book, quotes):
         if sym in multipliers and multipliers[sym] != multiplier:
             return None
         multipliers[sym] = multiplier
+    return multipliers
+
+
+def verified_book(state, username):
+    from .client import Book
+    if (state.username != username or not state.is_bot or not state.valuation_complete
+            or not state.trade_history_present or not fresh(state.fetched_at, clock.now_utc())
+            or position_multipliers(state) is None):
+        return None
+    return Book(state.trades)
+
+
+def verified_value(state, book, quotes):
+    """Return unrounded evidence or None; unsupported/incomplete inputs abstain."""
+    now = clock.now_utc()
+    cash, start = number(state.balance_cash), number(state.starting_balance)
+    if (not state.is_bot or not state.valuation_complete or not state.trade_history_present
+            or cash is None or start is None or start <= 0 or not fresh(state.fetched_at, now)):
+        return None
+    multipliers = position_multipliers(state)
+    if multipliers is None:
+        return None
     marks = quotes(list(book.positions)) if book.positions else {}
     equity, evidence = cash, {}
     # Check all timestamps against the completion of the quote batch too.
@@ -96,10 +115,12 @@ class LossRetirement:
 
     def read(self, username):
         path = self.path(username)
-        if not path.exists():
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
             return None
-        receipt = json.loads(path.read_text(encoding="utf-8"))
-        if (receipt.get("username") != username or receipt.get("origin") != self.origin
+        receipt = json.loads(raw)
+        if (not isinstance(receipt, dict) or receipt.get("username") != username or receipt.get("origin") != self.origin
                 or receipt.get("reason") != "account_return_below_minus_99_percent"):
             raise ValueError("Invalid loss retirement receipt; refusing to resume entries")
         return receipt

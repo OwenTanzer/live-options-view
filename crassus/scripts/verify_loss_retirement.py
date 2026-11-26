@@ -202,12 +202,13 @@ class RetirementTests(unittest.TestCase):
 
     def test_write_failure_cannot_allow_entry(self):
         with patch("crassus.retirement.atomic_json", side_effect=OSError("mock disk failure")):
-            with self.assertRaises(OSError):
+            with self.assertLogs("crassus", level="ERROR"):
                 self.run_visit()
         self.assertEqual(self.submits(), 0)
         self.assertIsNone(self.receipt())
+        # A missing receipt after failed persistence is not permission to reopen.
         self.run_visit()
-        self.assertIsNotNone(self.receipt())
+        self.assertEqual(self.submits(), 0)
 
     def test_receipt_survives_crash_before_ledger_and_corruption_fails_closed(self):
         with patch.object(self.runner.ledger, "record", side_effect=OSError("crash")):
@@ -217,8 +218,159 @@ class RetirementTests(unittest.TestCase):
         self.run_visit(restarted)
         self.assertEqual(self.submits(restarted), 0)
         self.runner.loss_retirement.path(self.account.username).write_text("broken")
-        with self.assertRaises(ValueError):
-            self.new_runner()
+        with self.assertLogs("crassus", level="ERROR"):
+            damaged = self.new_runner()
+        self.run_visit(damaged)
+        self.assertEqual(self.submits(damaged), 0)
+        self.assertFalse(damaged.sessions[self.account.alias].registration_allowed)
+        self.assertEqual(self.runner.loss_retirement.path(self.account.username).read_text(), "broken")
+
+    def two_accounts(self, *, bad_payload=None):
+        healthy = Account("Healthy", "healthy_fixture", "local-password", "smoke_atm_roundtrip")
+        root = Path(self.tmp.name)
+        runner = Runner([self.account, healthy], base_url="http://127.0.0.1:1",
+                        snapshot_url="http://127.0.0.1:1/snapshot", state_dir=root / "state",
+                        ledger_dir=root / "ledger", bot_registration_key="local-test-key")
+        runner.snapshots.read = Mock(return_value=None)
+        runner.quotes.quotes = Mock(side_effect=lambda symbols: {s: self.quote(s) for s in symbols})
+        payloads = {self.account.alias: bad_payload if bad_payload is not None else self.payload,
+                    healthy.alias: dict(self.payload, username=healthy.username, balance_cash=9900,
+                                        trades=[dict(TRADE, price=1)])}
+        orders = []
+        for account in runner.accounts:
+            payload = payloads[account.alias]
+
+            def transport(method, path, *, payload=payload, account=account, **kw):
+                if method == "POST" and path == "/api/paper-trade":
+                    body = kw["json"]
+                    orders.append((account.alias, body))
+                    payload["trades"].append(dict(TRADE, price=0.5, side=body["side"], qty=body["qty"],
+                                                  execution_request_id=body["execution_request_id"]))
+                    payload["balance_cash"] += 50
+                    return FakeResponse(201, json.dumps({"trade": payload["trades"][-1]}))
+                self.assertIn((method, path), [("POST", "/api/login"), ("POST", "/api/bot-metadata"),
+                                              ("GET", "/api/me")])
+                return FakeResponse(200, json.dumps(payload))
+
+            runner.sessions[account.alias]._request = Mock(side_effect=transport)
+        return runner, healthy, payloads, orders
+
+    def test_corrupt_receipt_does_not_block_healthy_exit_in_shared_cycle(self):
+        self.run_visit()
+        path = self.runner.loss_retirement.path(self.account.username)
+        for damaged in ("broken", "[]", '{"username":"wrong"}'):
+            with self.subTest(damaged=damaged):
+                path.write_text(damaged)
+                with self.assertLogs("crassus", level="ERROR") as signal:
+                    runner, healthy, payloads, orders = self.two_accounts()
+                self.assertIn("loss_retirement_receipt_error", str(signal.output))
+                self.strategy.side_effect = lambda ctx: self.decision(
+                    "sell" if ctx.account_alias == healthy.alias else "buy")
+                runner.startup()
+                self.assertTrue(runner.run_cycle())
+                self.assertEqual([alias for alias, _ in orders], [healthy.alias])
+                self.assertEqual(sum(1 if t["side"] == "buy" else -1
+                                     for t in payloads[healthy.alias]["trades"]), 0)
+                self.assertFalse(runner.sessions[self.account.alias].registration_allowed)
+                self.assertEqual(path.read_text(), damaged)
+
+    def test_corruption_during_visit_allows_verified_affected_exit(self):
+        self.payload.update(balance_cash=49, trades=[TRADE])
+        runner, healthy, payloads, orders = self.two_accounts()
+        path = runner.loss_retirement.path(self.account.username)
+        path.parent.mkdir(exist_ok=True)
+        path.write_text("corrupt after startup")
+        self.strategy.return_value = self.decision("sell")
+        with self.assertLogs("crassus", level="ERROR"):
+            self.assertTrue(runner.run_cycle())
+        self.assertEqual([alias for alias, _ in orders], [self.account.alias, healthy.alias])
+        self.assertEqual(path.read_text(), "corrupt after startup")
+        self.assertEqual(payloads[self.account.alias]["balance_cash"], 99)
+
+    def test_receipt_read_and_write_io_failures_are_account_isolated(self):
+        for operation in ("read", "record"):
+            with self.subTest(operation=operation):
+                runner, healthy, payloads, orders = self.two_accounts()
+                original = getattr(runner.loss_retirement, operation)
+                def fail(username, *args):
+                    if username == self.account.username:
+                        raise PermissionError("fixture denied")
+                    return original(username, *args)
+                self.strategy.side_effect = lambda ctx: self.decision(
+                    "sell" if ctx.account_alias == healthy.alias else "buy")
+                with patch.object(runner.loss_retirement, operation, side_effect=fail), \
+                     self.assertLogs("crassus", level="ERROR"):
+                    self.assertTrue(runner.run_cycle())
+                self.assertEqual([alias for alias, _ in orders], [healthy.alias])
+                self.assertFalse(runner.sessions[self.account.alias].registration_allowed)
+
+    def test_corrupt_receipt_does_not_allow_reprovisioning(self):
+        path = self.runner.loss_retirement.path(self.account.username)
+        path.parent.mkdir(exist_ok=True)
+        path.write_text("broken")
+        runner = self.new_runner()
+        session = runner.sessions[self.account.alias]
+        session._request = Mock(return_value=FakeResponse(401))
+        with self.assertRaises(ConfigError):
+            session.ensure_session()
+        self.assertEqual([c.args[1] for c in session._request.call_args_list], ["/api/login"])
+
+    def test_corrupt_receipt_pending_recovery_reconciles_but_never_replays_entry(self):
+        self.payload.update(balance_cash=49, trades=[TRADE])
+        path = self.runner.loss_retirement.path(self.account.username)
+        path.parent.mkdir(exist_ok=True)
+        path.write_text("broken")
+        runner = self.new_runner()
+        executor = ExecutionClient(runner.sessions[self.account.alias], runner.state_dir)
+        runner.executors[self.account.alias] = executor
+        intent = dict(execution_request_id="pending-buy", symbol=SYM, side="buy", quantity=1)
+        executor._persist_intent(intent)
+        executor.submit = Mock(side_effect=AssertionError("entry must not replay"))
+        self.run_visit(runner)
+        self.assertIsNotNone(executor.pending_intent())
+        executor.submit.assert_not_called()
+        self.payload["trades"][0] = dict(TRADE, execution_request_id="pending-buy")
+        self.run_visit(runner)  # existing fill can be reconciled and recorded
+        self.assertIsNone(executor.pending_intent())
+        executor.submit.assert_not_called()
+
+    def test_corrupt_receipt_pending_exit_replays_only_verified_reduction(self):
+        self.payload.update(balance_cash=49, trades=[TRADE])
+        runner, healthy, payloads, orders = self.two_accounts()
+        path = runner.loss_retirement.path(self.account.username)
+        path.parent.mkdir(exist_ok=True)
+        path.write_text("broken")
+        executor = runner.executors[self.account.alias]
+        executor._persist_intent(dict(execution_request_id="pending-sell", symbol=SYM, side="sell", quantity=1))
+        self.run_visit(runner)
+        self.assertEqual(len(orders), 1)
+        self.assertEqual(orders[0][1]["execution_request_id"], "pending-sell")
+        self.assertIsNone(executor.pending_intent())
+        self.assertEqual(path.read_text(), "broken")
+
+    def test_restricted_account_with_invalid_history_holds_without_blocking_peer(self):
+        for trade in ({"sym": SYM, "side": "buy", "qty": "invalid", "price": 1}, TRADE):
+            bad = dict(self.payload, trades=[trade], trade_history_complete=False)
+            runner, healthy, payloads, orders = self.two_accounts(bad_payload=bad)
+            path = runner.loss_retirement.path(self.account.username)
+            path.parent.mkdir(exist_ok=True)
+            path.write_text("broken")
+            self.strategy.return_value = self.decision("sell")
+            self.assertTrue(runner.run_cycle())
+            self.assertEqual([alias for alias, _ in orders], [healthy.alias])
+
+    def test_restricted_pending_with_invalid_history_does_not_block_peer(self):
+        bad = dict(self.payload, trades=["malformed"], trade_history_complete=True)
+        runner, healthy, payloads, orders = self.two_accounts(bad_payload=bad)
+        path = runner.loss_retirement.path(self.account.username)
+        path.parent.mkdir(exist_ok=True)
+        path.write_text("broken")
+        executor = runner.executors[self.account.alias]
+        executor._persist_intent(dict(execution_request_id="held", symbol=SYM, side="sell", quantity=1))
+        self.strategy.return_value = self.decision("sell")
+        self.assertTrue(runner.run_cycle())
+        self.assertEqual([alias for alias, _ in orders], [healthy.alias])
+        self.assertIsNotNone(executor.pending_intent())
 
     def test_dry_run_does_not_persist_retirement(self):
         self.runner.dry_run = True

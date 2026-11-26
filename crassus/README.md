@@ -133,7 +133,13 @@ The durable `loss-retirement-<identity hash>.json` receipt on the existing state
 volume retains the valuation and origin/username identity. It is written before
 any further decision; repeated visits and restarts reuse it even if equity
 recovers. Do not remove receipts during routine deployment. An unreadable receipt
-fails closed. Retired identities cannot register again. This is a runner entry
+restricts only the affected account, preserves the unreadable file and emits a
+`loss_retirement_receipt_error` operational event. Receipt read/write errors do
+not terminate startup or the shared cycle. That account cannot open exposure or
+register again; verified reduce-only strategy exits can continue. Pending fills
+still reconcile, but an absent pending order can replay only as a verified
+position reduction. Unverified books hold orders while healthy accounts continue.
+Retired identities cannot register again. This is a runner entry
 stop, not Worker account closure: it does not erase history, move funds, reseed,
 or liquidate. Existing strategy, protective and scheduled exits continue until
 flat; each proposed order must strictly reduce an existing position without
