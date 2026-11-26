@@ -1,0 +1,42 @@
+{
+  "band_shares": 10,
+  "multiplier": 100,
+  "legs": {
+    "long_call": 1,
+    "short_cap_call": -1
+  },
+  "steps": [
+    {
+      "tick": 0,
+      "reset_units": 2,
+      "deltas": {
+        "long_call": 0.75,
+        "short_cap_call": 0.25
+      }
+    },
+    {
+      "tick": 1,
+      "cash_flow_units": 1,
+      "deltas": {
+        "long_call": 0.77,
+        "short_cap_call": 0.25
+      }
+    },
+    {
+      "tick": 2,
+      "cash_flow_units": -1,
+      "deltas": {
+        "long_call": 0.79,
+        "short_cap_call": 0.34
+      }
+    },
+    {
+      "tick": 3,
+      "reset_units": 2,
+      "deltas": {
+        "long_call": 0.75,
+        "short_cap_call": 0.25
+      }
+    }
+  ]
+}

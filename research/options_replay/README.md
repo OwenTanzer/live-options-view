@@ -247,3 +247,5 @@ python -m unittest tests.test_options_replay -v
 ```
 
 The tests use synthetic packs and need no network or credentials.
+
+[Compare structured-product manager and dealer scenarios](participant_models.md) using paired hypothetical option and stock ledgers.
