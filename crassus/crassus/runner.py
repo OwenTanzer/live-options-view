@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 from urllib.parse import urljoin
 
-from .strategies.max_pain_episodes import THRESHOLDS as PIN_EPISODES
+from .strategies.max_pain_episodes import MAX_BOARD_AGE_SECONDS, THRESHOLDS as PIN_EPISODES
 from .strategies.me_bots import IDS as ME_BOTS, price_for as me_limit_price
 from .strategies.me_bots_inputs import Inputs as MeBotInputs
 from .strategies.oi_associator import IDS as OI_ASSOCIATORS, checked_flatten as oi_share_flatten
@@ -97,9 +97,11 @@ def _entry_board_hold(username, ctx, strategy):
         if stamp is not None:
             stamp = stamp.astimezone(clock.ET)
         if (stamp is not None and stamp.date() == day
-                and stamp.time() >= clock.MARKET_OPEN and stamp <= now):
+                and stamp.time() >= clock.MARKET_OPEN
+                and 0 <= (now - stamp).total_seconds() <= MAX_BOARD_AGE_SECONDS
+                and ctx.snapshot.expiration == day.isoformat()):
             return None
-        reason = "New entry requires a timestamped board observed in this regular session."
+        reason = "New entry requires a fresh 0DTE board observed in this regular session."
     return Decision.no_trade(reason, strategy.strategy_id, strategy.strategy_version)
 
 

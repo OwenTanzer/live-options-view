@@ -838,14 +838,18 @@ class RunnerWiringTests(unittest.TestCase):
         username = "crassus_oiskew_absolute"
         strategy = get_strategy("oi_skew_qqq")
         ctx = SimpleNamespace(now_et=datetime(2026, 11, 27, 11, tzinfo=self._clock.ET),
-                              book=SimpleNamespace(is_flat=True), snapshot=SimpleNamespace())
+                              book=SimpleNamespace(is_flat=True), snapshot=SimpleNamespace(expiration="2026-11-27"))
         for timestamp in (None, "bad", "2026-11-27T10:00:00", "2026-11-27T14:29:59Z",
-                          "2026-11-27T16:00:01Z"):
+                          "2026-11-27T16:00:01Z", "2026-11-27T14:30:00Z", "2026-11-27T15:53:59Z"):
             ctx.snapshot.timestamp = timestamp
             self.assertIsNotNone(_entry_board_hold(username, ctx, strategy))
-        ctx.snapshot.timestamp = "2026-11-27T14:30:00Z"
+        ctx.snapshot.timestamp = "2026-11-27T15:54:00Z"
         self.assertIsNone(_entry_board_hold(username, ctx, strategy))
+        ctx.snapshot.expiration = "2026-11-25"
+        self.assertIsNotNone(_entry_board_hold(username, ctx, strategy))
+        ctx.snapshot.expiration = "2026-11-27"
         ctx.now_et = ctx.now_et.replace(hour=13)
+        ctx.snapshot.timestamp = "2026-11-27T18:00:00Z"
         self.assertIsNotNone(_entry_board_hold(username, ctx, strategy))
         self.assertIsNone(_entry_board_hold("crassus_luigi", ctx, strategy))
         ctx.book.is_flat = False
