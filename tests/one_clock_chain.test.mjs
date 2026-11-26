@@ -186,3 +186,17 @@ test('market replay selects the immutable publication before the compatibility s
   const bytes=bucket.records.get(evidence[0].key);bytes.text=bytes.text.replace('661','662');
   assert.equal((await request(T+1000)).status,503);
 });
+
+test('window projection admits only the bounded fields and as-of timestamps',async()=>{
+  const iso = ms => new Date(ms).toISOString();
+  const good={status:'ok',return_pct:1.2,direction:'up',anchor_observed_at:iso(T),secret:'bad'};
+  const market={symbol:'QQQ',spot_ts:iso(T),freshness:'live',momentum_windows:{
+    observed_at:iso(T),session,readings:{session:good,'5m':{...good,anchor_observed_at:iso(T+1)},private:good}}};
+  const read=async m=>(await readArchivedChain(storage({[metaKey]:{text:JSON.stringify({...meta,market:m})}}),scope())).rows[0].value.underlying_market;
+  const r=(await read(market)).momentum_windows.readings;
+  assert.deepEqual(r.session,{status:'ok',return_pct:1.2,direction:'up',anchor_observed_at:iso(T)});
+  assert.equal(r['5m'].return_pct,null);
+  assert.equal(r.private,undefined);
+  assert.equal(await read({...market,symbol:'SPY'}),undefined);
+  assert.equal(await read({...market,spot_ts:iso(T+20)}),undefined);
+});

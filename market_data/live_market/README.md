@@ -136,3 +136,11 @@ confirmed latest publication time for queued readings, or null until confirmed. 
 time for native availability and the successful latest write recorded in the
 final sidecar for compatibility-view availability. A pending sidecar establishes
 archive capture only.
+
+QQQ snapshots also publish `underlying_market.momentum_windows`. The 5m, 9m,
+15m, 30m and 60m windows use regular-session spot receipts available at snapshot
+construction. The session return uses the provider's dated opening price.
+Each result includes its status, percent return, direction and anchor time.
+Short-window anchor overshoot is capped at half the window or the legacy
+ten-minute maximum, whichever is smaller. Missing, stale or warming observations
+have no return. The preexisting one-hour signal and its log remain compatible.

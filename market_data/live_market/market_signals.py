@@ -41,6 +41,7 @@ account's live one.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 
@@ -353,3 +354,51 @@ def compute_time_series_momentum(
         sample_count=sample_count,
         direction=direction,
     )
+
+
+def momentum_windows(history, *, now, session, bounds, observed, spot, day_open,
+                     max_age_seconds, max_overshoot, neutral_band):
+    """Regular-session returns at a snapshot. Timestamps are collector spot receipts."""
+    from bisect import bisect_right
+
+    def usable(price):
+        return type(price) in (float, int) and math.isfinite(price) and price > 0
+
+    def unavailable(status):
+        return {"status": status, "return_pct": None, "direction": None,
+                "anchor_observed_at": None}
+
+    readings = {key: unavailable("no_data") for key in ("5m", "9m", "15m", "30m", "60m", "session")}
+    result = {"session": session.isoformat(), "observed_at": None, "readings": readings}
+    if not bounds or observed is None or not usable(spot):
+        return result
+    opening, closing = bounds
+    if not (opening <= observed <= now and observed <= closing and now <= closing + timedelta(seconds=max_age_seconds)):
+        return result
+    result["observed_at"] = observed.isoformat()
+    if now - observed > timedelta(seconds=max_age_seconds):
+        result["readings"] = {key: unavailable("stale") for key in readings}
+        return result
+
+    def measured(price, anchor):
+        pct = (spot / price - 1) * 100
+        return {"status": "ok", "return_pct": round(pct, 4),
+                "direction": "up" if pct > neutral_band else "down" if pct < -neutral_band else "flat",
+                "anchor_observed_at": anchor.isoformat()}
+
+    points = sorted((p for p in history if opening <= p.observed_at <= observed and usable(p.price)),
+                    key=lambda p: p.observed_at)
+    times = [p.observed_at for p in points]
+    for minutes in (5, 9, 15, 30, 60):
+        target = now - timedelta(minutes=minutes)
+        index = bisect_right(times, target) - 1
+        key = f"{minutes}m"
+        if index < 0:
+            readings[key] = unavailable("warming_up")
+        elif target - times[index] > timedelta(minutes=min(max_overshoot, minutes / 2)):
+            readings[key] = unavailable("stale_anchor")
+        else:
+            readings[key] = measured(points[index].price, times[index])
+    if usable(day_open):
+        readings["session"] = measured(day_open, opening)
+    return result

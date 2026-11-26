@@ -1,5 +1,6 @@
 // Bounded market-only projection. No client-supplied object key, URL, account,
 // capture, storage write, or fallback to a current snapshot during replay.
+import { momentumMarket } from './one-clock-momentum.js';
 import { publicationDigest } from './one-clock-publication-contract.js';
 import { jsonResponse } from './common.js';
 import { instant, observation } from '../site/shared/one-clock.js';
@@ -104,7 +105,7 @@ export async function readArchivedChain(bucket,{session,instrument,cutoff}) {
     const rows=projectChainCsv(csv.text,instrument,session);
     const expirations=[...new Set(rows.map(row=>row.Expiration))];
     if(expirations.length!==1 || expirations[0]<session || (instrument!=='IBIT' && expirations[0]!==session)) continue;
-    const payload={symbol:instrument,date:session,expiration:expirations[0],timestamp:new Date(eventAt).toISOString(),
+    const payload={...momentumMarket(p.market,{instrument,session,eventAt}),symbol:instrument,date:session,expiration:expirations[0],timestamp:new Date(eventAt).toISOString(),
       snapshot_time:new Date(eventAt).toISOString(),snapshot_key:csvKey,
       underlying_price:rows.find(r=>r.UnderlyingPrice>0)?.UnderlyingPrice??null,rows,
       market_readings:(Array.isArray(p.market_readings)?p.market_readings:[]).map(r=>readingProjection(r,{cutoff,instrument,csvKey,eventAt})).filter(Boolean)};
@@ -186,7 +187,7 @@ export async function verifiedNativeChain(bucket,{session,instrument,cutoff},sel
   return {coverage,rows:[observation({source:'chain',id:selected.id,revision:selected.revision,session,instrument,origin:'recorded',
     eventAt,availableAt:selected.availableAt,evidence:selected.evidence,
     details:{availabilityBasis:coverage.availabilityBasis,digestVerification:coverage.digestVerification,sequence:selected.details.sequence},
-    value:{symbol:instrument,date:session,tier:['0DTE_Regular','0DTE_Weekly','0DTE_Monthly'].includes(payload.tier)?payload.tier:null,spotAt:stamp(payload.underlying_market?.spot_ts),spotFreshness:payload.underlying_market?.freshness==='live'?'live':null,expiration:expirations[0],timestamp,snapshot_time:timestamp,snapshot_key:csvKey,
+    value:{...momentumMarket(payload.underlying_market,{instrument,session,eventAt}),symbol:instrument,date:session,tier:['0DTE_Regular','0DTE_Weekly','0DTE_Monthly'].includes(payload.tier)?payload.tier:null,spotAt:stamp(payload.underlying_market?.spot_ts),spotFreshness:payload.underlying_market?.freshness==='live'?'live':null,expiration:expirations[0],timestamp,snapshot_time:timestamp,snapshot_key:csvKey,
       underlying_price:spot,rows:spot===null?rows.map(row=>({...row,UnderlyingPrice:null})):rows,market_readings:(payload.market_readings??[]).map(r=>readingProjection(r,{cutoff,instrument,csvKey,eventAt})).filter(Boolean)}})]};
 }
 export async function handleOneClockChain(request,env,url) {

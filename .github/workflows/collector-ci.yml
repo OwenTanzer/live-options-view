@@ -50,6 +50,7 @@ on:
       - "tests/test_oa203_windows_replay.py"
       - "tests/stage2_verification.py"
       - "tests/verify_collector_vwap_rvol.py"
+      - "tests/test_momentum_windows.py"
       - "tests/verify_collector_spy.py"
       - "tests/test_multi_underlying.py"
       - "tests/test_provisional_collector.py"
@@ -104,6 +105,7 @@ on:
       - "tests/test_oa203_windows_replay.py"
       - "tests/stage2_verification.py"
       - "tests/verify_collector_vwap_rvol.py"
+      - "tests/test_momentum_windows.py"
       - "tests/verify_collector_spy.py"
       - "tests/test_multi_underlying.py"
       - "tests/test_provisional_collector.py"
@@ -171,7 +173,9 @@ jobs:
       - name: Run capture diagnostics suite
         run: python -m unittest discover -s tests -p test_capture_diagnostics.py -v
       - name: Run VWAP/RVOL collector suite
-        run: python tests/verify_collector_vwap_rvol.py
+        run: |
+          python tests/verify_collector_vwap_rvol.py
+          python -m unittest discover -s tests -p test_momentum_windows.py -v
       - name: Run SPY collection isolation suite
         run: python tests/verify_collector_spy.py
       - name: Run multi-underlying settlement marks suite (#182)
