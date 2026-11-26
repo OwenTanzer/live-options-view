@@ -347,6 +347,25 @@ function harness(saved = 'QQQ') {
 const settle = () => new Promise(r => setImmediate(r));
 
 (async () => {
+  // Equal call/put OI across six strikes ties the two middle payouts.
+  const hPin = harness();
+  const chain = snapshot('QQQ');
+  chain.rows = [603, 601, 604, 602, 605, 600].flatMap(Strike =>
+    snapshot('QQQ', { price: Strike }).rows.map(row => ({ ...row, OpenInterest: 10 })));
+  hPin.routes['intraday/latest.json'] = hPin.reply(chain);
+  await hPin.api.fetchLatest();
+  assert.equal(hPin.el('max-pain').textContent, 'Max pain $602.00');
+  chain.rows.find(row => row.Strike === 605 && row.Type === 'put').OpenInterest = 1000;
+  await hPin.api.fetchLatest();
+  assert.equal(hPin.el('max-pain').textContent, 'Max pain $605.00');
+  delete hPin.routes['intraday/latest.json'];
+  await hPin.api.fetchLatest();
+  assert.equal(hPin.el('max-pain').textContent, 'Max pain $605.00 · retained');
+  hPin.routes['intraday/spy/latest.json'] = hPin.reply(snapshot('SPY'));
+  hPin.api.selectUnderlying('SPY');
+  assert.equal(hPin.el('max-pain').textContent, 'Max pain —');
+  await settle(); await settle();
+  assert.equal(hPin.el('max-pain').textContent, 'Max pain unavailable');
   await testPriceTile();
   await testSpyHealthBadge();
   // QQQ → SPY → QQQ: headings, rendered data and QQQ-only side effects stay consistent.

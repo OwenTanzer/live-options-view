@@ -62,7 +62,7 @@
     padding: 2px 8px; border-radius: 4px;
     background: #1c2128; border: 1px solid var(--border);
   }
-  #vwap-rvol, #momentum {
+  #vwap-rvol, #momentum, #max-pain {
     font-size: 0.78rem;
     font-weight: 600;
     color: var(--dim);
@@ -1555,7 +1555,7 @@
 .iv-pop canvas{display:block;width:100%;height:78px}.iv-pop small{color:var(--dim);line-height:1.4}
 @media(max-width:650px){#qqq-iv{flex-basis:100%}}
   #btc-panel { padding: 12px; max-width: 100%; }
-  body[data-chain="BTC"] :is(#price, #price-age, #tier-badge, #vwap-rvol, #momentum, #chain-note, #qqq-iv,
+  body[data-chain="BTC"] :is(#price, #price-age, #tier-badge, #vwap-rvol, #momentum, #max-pain, #chain-note, #qqq-iv,
     #status-bar, #cal-error, #oi-skew-meter, #spy-oi-skew-meter, #ibit-oi-skew-meter,
     #price-strip, #steo-panel, #no-data, #heatmap-wrap, #tab-history, #footer) { display:none !important; }
   body[data-chain="BTC"] #paper-panel h3 { flex-wrap:wrap; }
@@ -1691,6 +1691,7 @@
   <span id="tier-badge" style="display:none"></span>
   <span id="vwap-rvol" class="vwap-rvol"></span>
   <span id="momentum" class="momentum"></span>
+  <span id="max-pain" title="Strike with the lowest combined call and put payout at expiration, weighted by settled open interest across the selected chain. Requires five strikes with open interest on both sides.">Max pain —</span>
   <span id="qqq-iv"><button type="button" aria-controls="iv-pop" aria-expanded="false">IV <b>&#8212;</b></button><button type="button" aria-controls="iv-pop" aria-expanded="false">Put IV premium <b>&#8212;</b></button><time></time><span class="iv-pop" id="iv-pop" hidden><canvas width="285" height="80" aria-label="Intraday volatility history"></canvas><small></small></span></span>
     <span id="chain-note" class="chain-note"></span>
 </div>
@@ -2279,7 +2280,7 @@ let timerHandle = null;
 // stays here as the section's marker.
 </script>
 <script src="js/qqq-iv.js?v=3d367be7c00bcf71"></script>
-<script src="js/data-fetch-cycle.js?v=6587a027edd3a618"></script>
+<script src="js/data-fetch-cycle.js?v=fee5b5bdb8bb7924"></script>
 <script src="js/oi-skew-meter.js?v=e4f1fc4047f80a6f"></script>
 <script src="js/reference-oi-skew-meters.js?v=684a55cfdd32ce6c"></script>
 <script>
