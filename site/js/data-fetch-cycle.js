@@ -94,6 +94,34 @@ function selectedChainData() {
   return chainState[chainSelection.symbol]?.data ?? null;
 }
 
+// Between listed strikes the payout slope is calls at/below minus puts above.
+function maxPainStrike(data) {
+  const interest = new Map();
+  let expiration = data.expiration;
+  let slope = 0;
+  for (const row of data.rows) {
+    if (row.Expiration) {
+      if (expiration && expiration !== row.Expiration) return null;
+      expiration = row.Expiration;
+    }
+    const strike = Number(row.Strike);
+    const oi = Number(row.OpenInterest);
+    if (!Number.isFinite(strike) || strike <= 0 || !Number.isSafeInteger(oi) || oi <= 0) continue;
+    if (row.Type !== 'call' && row.Type !== 'put') continue;
+    const sides = interest.get(strike) || { call: 0, put: 0 };
+    sides[row.Type] += oi;
+    interest.set(strike, sides);
+    if (row.Type === 'put') slope -= oi;
+  }
+  // Match the QQQ strategy's minimum coverage and lower-strike tie break.
+  if ([...interest.values()].filter(sides => sides.call && sides.put).length < 5) return null;
+  for (const [strike, sides] of [...interest].sort(([a], [b]) => a - b)) {
+    slope += sides.call + sides.put;
+    if (slope >= 0) return strike;
+  }
+  return null;
+}
+
 function clearChain(message) {
   document.getElementById('heatmap-body').innerHTML = '';
   document.getElementById('heatmap-wrap').classList.add('hidden');
@@ -101,6 +129,7 @@ function clearChain(message) {
   noData.textContent = message;
   noData.classList.remove('hidden');
   for (const id of ['vwap-rvol', 'momentum', 'chain-note']) document.getElementById(id).textContent = '';
+  document.getElementById('max-pain').textContent = 'Max pain —';
   const price = document.getElementById('price');
   price.textContent = '—';
   price.title = '';
@@ -144,6 +173,11 @@ function renderSelectedChain() {
     setStatus('stale', data.snapshot_time || '—');
     return;
   }
+  const pin = maxPainStrike(data);
+  const retained = state.error || formatChainSnapshot(data).state === 'retained';
+  document.getElementById('max-pain').textContent = pin == null
+    ? 'Max pain unavailable'
+    : `Max pain $${pin.toFixed(2)}${retained ? ' · retained' : ''}`;
   renderHeatmap(data, symbol);
   if (!data.underlying_price) return;  // renderHeatmap already marked it stale
   const hasBids = data.rows.some(r => r.Bid != null);
