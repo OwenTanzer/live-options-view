@@ -97,3 +97,5 @@ const isolated=exact(.04);
 Object.defineProperty(isolated.bins,1,{get(){throw Error('Later bin read');}});
 assert.equal(alkalusFlow(isolated,0,1000,minute).kind,'copper');
 console.log('Exact boundaries, missing/invalid inputs, gap edges and forbidden later-bin access passed');
+
+await import('./intraminute_regime.mjs');

@@ -574,6 +574,13 @@ what had arrived by that instant. The bundled Nov 13 sample opens offline.
 See [Tradier operations](../market_data/tradier/OPERATIONS.md#qqq-intraminute-order-flow)
 for source coverage and live activation.
 
+The Bayesian minute-end calculator defaults to the immediately preceding
+archived candle. Its bounds follow the plotted midpoints at the chosen bin
+width and include plotted trade highs and lows when Underlying trades is on.
+If that candle is missing, has a recorded outage, or has no usable price
+range, the preset abstains. Choose Manual to supply a different band. Both
+modes use your one-minute price volatility and UTC known time.
+
 #### Alkalus flow classification (preliminary)
 
 Each selected interval also carries a preliminary Alkalus classification —
