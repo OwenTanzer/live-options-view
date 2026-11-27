@@ -8,6 +8,8 @@ const time=at=>new Date(at).toISOString().slice(11,23);
 const params=new URLSearchParams(location.search);
 let minute=sample, rows=[], generation=0, timer, playback, live=false, data=null;
 let regimeAvailability='';
+let previousArchive;
+let manualBand = ['', ''];
 let detailOffset=0;
 let selected=params.has('strike')?Number(params.get('strike')):null;
 const isoMinute=at=>new Date(at).toISOString().slice(0,16);
@@ -89,8 +91,20 @@ function paint() {
   inspect(sec);
 }
 function renderRegime(result) {
+  const usePrevious = $('regime-source').value === 'previous';
+  let bandIssue;
+  if (usePrevious) {
+    const { low, high, reason } = previousCandleBand();
+    $('regime-low').value = low ?? '';
+    $('regime-high').value = high ?? '';
+    bandIssue = reason;
+  }
   if (regimeAvailability) {
     $('regime-result').textContent = regimeAvailability;
+    return;
+  }
+  if (bandIssue) {
+    $('regime-result').textContent = bandIssue;
     return;
   }
   const estimate = regimeNowcast(result.inspected, result.gaps, {
@@ -99,13 +113,74 @@ function renderRegime(result) {
     sigma: $('regime-sigma').valueAsNumber, knownAt: $('regime-known').valueAsNumber,
   });
   const pct = p => (100 * p).toFixed(1) + '%';
+  const band = usePrevious ? ' the previous candle' : '';
   $('regime-result').textContent = estimate.reason ||
-    'Below ' + pct(estimate.below) + ' · Inside ' + pct(estimate.inside) + ' · Above ' + pct(estimate.above) +
+    'Below' + band + ' ' + pct(estimate.below) + ' · Inside' + band + ' ' + pct(estimate.inside) + ' · Above' + band + ' ' + pct(estimate.above) +
     ' · as of ' + time(minute + Number($('cursor').value)) + ' UTC';
 }
-$('regime-panel').ontoggle = () => { if ($('regime-panel').open && data) renderRegime(data); };
+function previousCandleBand() {
+  const previous = minute - 60000;
+  if (previousArchive?.minute !== previous) {
+    const archive = { minute: previous, reason: 'Reading the previous candle…' };
+    previousArchive = archive;
+    readArchive(previous).then(body => {
+      archive.rows = body.rows;
+    }, error => {
+      archive.reason = error.message === 'No published archive for this minute.'
+        ? 'No archived previous candle. Choose Manual to enter bounds.'
+        : 'Could not load the previous candle. Choose Manual to enter bounds.';
+      archive.failed = true;
+    }).then(() => {
+      if (previousArchive === archive && minute - 60000 === previous && $('regime-panel').open) {
+        renderRegime(data);
+      }
+    });
+  }
+  const width = Number($('width').value);
+  const includeTrades = $('trades').checked;
+  if (!previousArchive.rows) return { reason: previousArchive.reason };
+  if (previousArchive.width !== width || previousArchive.includeTrades !== includeTrades) {
+    previousArchive.band = candleBand(previousArchive.rows, previous, width, includeTrades);
+    previousArchive.width = width;
+    previousArchive.includeTrades = includeTrades;
+  }
+  return previousArchive.band;
+}
+function candleBand(rows, previous, width, includeTrades) {
+  const cutoff = previous + 59999;
+  const { bins, gaps } = model(rows, { minute: previous, cutoff, width });
+  if (gaps.some(([start, end]) => start <= cutoff && end >= previous)) {
+    return { reason: 'The previous candle has interrupted coverage. Choose Manual to enter bounds.' };
+  }
+  const prices = bins.flatMap(bin => includeTrades ? [bin.mid, bin.low, bin.high] : [bin.mid])
+    .filter(Number.isFinite);
+  const low = Math.min(...prices), high = Math.max(...prices);
+  if (!(low > 0 && high > low)) {
+    return { reason: 'The previous candle has no usable price range. Choose Manual to enter bounds.' };
+  }
+  return { low, high };
+}
+$('regime-panel').ontoggle = () => {
+  if (!$('regime-panel').open || !data) return;
+  if (previousArchive?.failed) previousArchive = undefined;
+  renderRegime(data);
+};
+$('regime-source').onchange = () => {
+  const manual = $('regime-source').value === 'manual';
+  for (const [index, id] of ['regime-low', 'regime-high'].entries()) {
+    $(id).readOnly = !manual;
+    $(id).value = manual ? manualBand[index] : '';
+  }
+  if (!manual && previousArchive?.failed) previousArchive = undefined;
+  if (data) renderRegime(data);
+};
 for (const id of ['regime-low', 'regime-high', 'regime-sigma', 'regime-known']) {
-  $(id).oninput = () => { if (data) renderRegime(data); };
+  $(id).oninput = () => {
+    if (id === 'regime-low' || id === 'regime-high') {
+      manualBand = [$('regime-low').value, $('regime-high').value];
+    }
+    if (data) renderRegime(data);
+  };
 }
 function inspect(second) {
   const slice=data.inspected.filter(row=>Math.floor((row.at-minute)/1000)===second);
@@ -139,16 +214,20 @@ function inspect(second) {
     body.append(tr);
   }
 }
+async function readArchive(at) {
+  const bundled = [sample-60000, sample, sample+60000].includes(at);
+  const res = await fetch(bundled ? '/intraminute/'+at+'.json' : api+'?minute='+at);
+  if (!res.ok) throw Error(res.status===404 ? 'No published archive for this minute.' : 'Archive unavailable ('+res.status+').');
+  const body = await res.json();
+  if (body.minute !== at || body.version !== 1 || !Array.isArray(body.rows)) throw Error('Invalid archive minute.');
+  return body;
+}
 async function replay(at,offset=59999) {
   reset(); const id=generation;
   minute=receiptMinute(at);$('minute').value=isoMinute(minute);$('cursor').value=offset;
   $('state').textContent='Reading archived minute…';paint();
-  const bundled=[sample-60000,sample,sample+60000].includes(minute);
   try {
-    const res=await fetch(bundled?'/intraminute/'+minute+'.json':api+'?minute='+minute);
-    if(!res.ok) throw Error(res.status===404?'No published archive for this minute.':'Archive unavailable ('+res.status+').');
-    const body=await res.json();
-    if(body.minute!==minute || body.version!==1 || !Array.isArray(body.rows)) throw Error('Invalid archive minute.');
+    const body=await readArchive(minute);
     if(id!==generation)return;
     rows=body.rows;strikes();paint();
     $('state').textContent=(body.source==='session-provisional'?'Provisional session tape · ':'Archived QQQ tape · ')+isoMinute(minute).replace('T',' ')+' UTC';

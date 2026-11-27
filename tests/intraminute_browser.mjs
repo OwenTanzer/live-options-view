@@ -27,6 +27,7 @@ try {
   assert.match(await page.locator('#next-second').textContent(),/Next-second observation — not part of this interval’s classification: midpoint change one second later /);
   assert.ok(await page.locator('#rows tr').count()>0);
   await page.locator('#regime-panel summary').click();
+  await page.locator('#regime-source').selectOption('manual');
   await page.locator('#regime-low').fill('685.7');
   await page.locator('#regime-high').fill('686');
   await page.locator('#regime-sigma').fill('0.22');
@@ -66,7 +67,11 @@ try {
   const owned=sample+180000;
   const q=(offset,mid)=>({kind:'quote',at:owned+offset,bid:mid-.01,ask:mid+.01,bidAt:owned+offset,askAt:owned+offset});
   const option={kind:'option',at:owned+80,t:owned+80,seq:1,symbol:'QQQ261113C00670000',type:'C',strike:670,size:10,label:'buy',basis:'q1',price:1};
-  let move=.1,later=671,gaps=[],missing=false;
+  let move=.1,later=671,gaps=[],missing=false,previousCoverage='complete';
+  const previous = owned - 60000;
+  const previousRows = [q(-59990,668), q(-59100,669), q(-58900,670),
+    {kind:'stock',at:previous+101,t:previous+101,seq:2,price:667,size:1,flag:'@'},
+    {kind:'stock',at:previous+102,t:previous+102,seq:3,price:671,size:1,flag:'@'}];
   const probe=await browser.newPage({viewport:{width:1280,height:900}});
   probe.on('pageerror',e=>errors.push(String(e)));
   await probe.route('**/*',async route=>{
@@ -74,6 +79,12 @@ try {
     if(url.pathname==='/api/one-clock/intraminute') {
       const rows=[...(!missing?[q(10,669.08)]:[]),option,...(!missing?[q(900,669.08+move)]:[]),q(1100,later),...gaps];
       const response=await intraminute(new Request(url),{PAPER_TRADES:{get:async key=>{
+        if (key === `order-flow/qqq/intraminute/v1/${previous}.json`) {
+          if (previousCoverage === 'missing') return null;
+          const outage = previousCoverage === 'interrupted'
+            ? [{kind:'gap',at:previous+500,start:previous+100,reason:'stream_reconnect_resumed'}] : [];
+          return {body:JSON.stringify({version:1,minute:previous,rows:[...previousRows,...outage]})};
+        }
         assert.equal(key,`order-flow/qqq/intraminute/v1/${owned}.json`);
         return {body:JSON.stringify({version:1,minute:owned,rows})};
       }}},url);
@@ -115,6 +126,40 @@ try {
   if(process.env.REVIEW_SCREENSHOT) await probe.screenshot({path:process.env.REVIEW_SCREENSHOT,fullPage:true});
   await probe.locator('#detail').fill('1');await probe.locator('#detail').fill('0');
   assert.match(await probe.locator('#response').textContent(),/golden time/);
+
+  await probe.locator('#regime-panel summary').click();
+  const low = probe.locator('#regime-low'), high = probe.locator('#regime-high');
+  const source = probe.locator('#regime-source'), result = probe.locator('#regime-result');
+  await probe.waitForFunction(() => document.querySelector('#regime-low').value === '669');
+  assert.equal(await source.inputValue(),'previous');
+  assert.equal(await high.inputValue(),'670');
+  assert.equal(await low.isEditable(),false);
+  await probe.locator('#width').selectOption('100');
+  assert.equal(await low.inputValue(),'668');
+  await probe.locator('#trades').check();
+  assert.equal(await low.inputValue(),'667');
+  assert.equal(await high.inputValue(),'671');
+  await probe.locator('#regime-sigma').fill('0.2');
+  await probe.locator('#regime-known').fill('2026-11-13T14:38');
+  assert.match(await result.textContent(),/^Below the previous candle .*Inside the previous candle .*Above the previous candle /);
+  await source.selectOption('manual');
+  await low.fill('669');await high.fill('670');
+  assert.match(await result.textContent(),/^Below [\d.]+%/);
+  await source.selectOption('previous');
+  assert.equal(await low.inputValue(),'667');
+  await source.selectOption('manual');
+  assert.equal(await low.inputValue(),'669');
+  assert.equal(await high.inputValue(),'670');
+  for (const [coverage, message] of [['missing','No archived previous candle'],['interrupted','interrupted coverage']]) {
+    previousCoverage = coverage;
+    await open();
+    await probe.locator('#regime-panel summary').click();
+    await result.getByText(message,{exact:false}).waitFor();
+    assert.equal(await low.inputValue(),'');
+    assert.equal(await high.inputValue(),'');
+    await source.selectOption('manual');
+    assert.equal(await low.isEditable(),true);
+  }
   assert.deepEqual(errors,[]);
   console.log('Real API/browser entry: later-only change, thresholds, adverse reason, gaps, missing input and phone evidence passed');
 } finally {await browser.close();}
